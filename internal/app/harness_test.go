@@ -185,6 +185,7 @@ type message struct {
 	ID                 string
 	ReceivedAt         time.Time
 	Subject            string
+	Preview            string
 	Sender             string
 	Recipients         []string
 	EnvelopeSender     string

@@ -3,20 +3,35 @@ package intake
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net/textproto"
 	"strings"
 	"time"
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 	"github.com/jhillyerd/enmime/v2"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/charset"
 
 	"oubliette/internal/store"
 )
 
-const maxLineLength = 1 << 20
+const (
+	maxLineLength = 1 << 20
+	previewSource = 256 << 10
+	previewDepth  = 3
+	previewParts  = 20
+	previewText   = 4096
+	previewLength = 200
+)
 
 var (
 	errAuthRequired = &smtp.SMTPError{Code: 530, EnhancedCode: smtp.EnhancedCode{5, 7, 0}, Message: "Authentication required"}
@@ -121,7 +136,8 @@ func (s *session) Data(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	headers, err := enmime.ReadHeader(bufio.NewReader(bytes.NewReader(raw)), unreported{})
+	source := bufio.NewReader(bytes.NewReader(raw))
+	headers, err := enmime.ReadHeader(source, unreported{})
 	if err != nil {
 		s.backend.log.Warn("the headers of a Message could not be read", "inbox", s.inbox.ID, "error", err)
 	}
@@ -130,6 +146,7 @@ func (s *session) Data(r io.Reader) error {
 		EnvelopeSender:     s.sender,
 		EnvelopeRecipients: s.recipients,
 		Subject:            enmime.DecodeRFC2047(headers.Get("Subject")),
+		Preview:            preview(headers, source),
 		Sender:             strings.Join(displayed(headers.Get("From")), ", "),
 		Recipients:         append(displayed(headers.Get("To")), displayed(headers.Get("Cc"))...),
 	}
@@ -144,6 +161,95 @@ func (s *session) Data(r io.Reader) error {
 		return errUnavailable
 	}
 	return nil
+}
+
+var (
+	invisible = map[string]bool{"head": true, "title": true, "style": true, "script": true, "noscript": true, "template": true, "svg": true}
+	inline    = map[string]bool{
+		"a": true, "abbr": true, "b": true, "code": true, "em": true, "font": true, "i": true,
+		"small": true, "span": true, "strong": true, "sub": true, "sup": true, "u": true,
+	}
+)
+
+func preview(header textproto.MIMEHeader, body io.Reader) string {
+	plain, markup := bodyText(header, io.LimitReader(body, previewSource), previewDepth)
+	words := strings.Fields(plain)
+	if len(words) == 0 {
+		words = strings.Fields(visibleText(markup))
+	}
+	beginning := []rune(strings.Join(words, " "))
+	return string(beginning[:min(len(beginning), previewLength)])
+}
+
+func bodyText(header textproto.MIMEHeader, body io.Reader, depth int) (plain, markup string) {
+	mediaType, params, err := mime.ParseMediaType(header.Get("Content-Type"))
+	if err != nil {
+		mediaType = "text/plain"
+	}
+	attached := strings.HasPrefix(strings.ToLower(header.Get("Content-Disposition")), "attachment")
+	switch {
+	case attached:
+	case strings.HasPrefix(mediaType, "multipart/") && depth > 0:
+		parts := multipart.NewReader(body, params["boundary"])
+		for range previewParts {
+			part, err := parts.NextRawPart()
+			if err != nil {
+				break
+			}
+			partPlain, partMarkup := bodyText(part.Header, part, depth-1)
+			plain, markup = cmp.Or(plain, partPlain), cmp.Or(markup, partMarkup)
+			if plain != "" {
+				break
+			}
+		}
+	case mediaType == "text/plain":
+		plain = strings.TrimSpace(decodedText(header, params["charset"], body))
+	case mediaType == "text/html":
+		markup = decodedText(header, params["charset"], body)
+	}
+	return plain, markup
+}
+
+func decodedText(header textproto.MIMEHeader, label string, body io.Reader) string {
+	switch strings.ToLower(strings.TrimSpace(header.Get("Content-Transfer-Encoding"))) {
+	case "base64":
+		body = base64.NewDecoder(base64.StdEncoding, body)
+	case "quoted-printable":
+		body = quotedprintable.NewReader(body)
+	}
+	if converted, err := charset.NewReaderLabel(label, body); err == nil {
+		body = converted
+	}
+	text, _ := io.ReadAll(io.LimitReader(body, previewText))
+	return strings.ToValidUTF8(string(text), "")
+}
+
+func visibleText(document string) string {
+	var text strings.Builder
+	hidden := 0
+	tokens := html.NewTokenizer(strings.NewReader(document))
+	for text.Len() < previewText {
+		token := tokens.Next()
+		if token == html.ErrorToken {
+			break
+		}
+		if token == html.TextToken {
+			if hidden == 0 {
+				text.Write(tokens.Text())
+			}
+			continue
+		}
+		name, _ := tokens.TagName()
+		switch tag := string(name); {
+		case invisible[tag] && token == html.StartTagToken:
+			hidden++
+		case invisible[tag] && token == html.EndTagToken && hidden > 0:
+			hidden--
+		case !inline[tag]:
+			text.WriteByte(' ')
+		}
+	}
+	return text.String()
 }
 
 func displayed(header string) []string {

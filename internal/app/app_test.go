@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"oubliette/internal/app"
 )
@@ -52,6 +54,19 @@ func TestInterfaceIsServedFromTheBinary(t *testing.T) {
 	}
 	if asset := b.Get(script[1]); asset.Status != http.StatusOK || !strings.Contains(asset.Header.Get("Content-Type"), "javascript") {
 		t.Fatalf("GET %s = %d %s, want a script", script[1], asset.Status, asset.Header.Get("Content-Type"))
+	}
+}
+
+func TestEveryInboxURLServesTheInterface(t *testing.T) {
+	i := start(t)
+	b := i.Browser()
+
+	page := b.Get("/inboxes/any-inbox")
+	if page.Status != http.StatusOK || !strings.Contains(page.Body, "<title>Oubliette</title>") {
+		t.Fatalf("GET /inboxes/any-inbox = %d %s, want the interface", page.Status, page.Body)
+	}
+	if elsewhere := b.Get("/no-such-page"); elsewhere.Status != http.StatusNotFound {
+		t.Fatalf("GET /no-such-page = %d, want 404", elsewhere.Status)
 	}
 }
 
@@ -396,8 +411,9 @@ func TestSecretsAreNotStoredInClear(t *testing.T) {
 
 type inboxList struct {
 	Inboxes []struct {
-		ID   string
-		Name string
+		ID           string
+		Name         string
+		MessageCount int
 	}
 }
 
@@ -533,6 +549,98 @@ func TestListFieldsAreReadFromTheHeadersWhenThereAreSome(t *testing.T) {
 	}
 	if bare := listed[""]; bare.Sender != "app@staging.example" || !slices.Equal(bare.Recipients, []string{"a@example.com"}) {
 		t.Errorf("Message without headers listed as %+v, want the envelope addresses", bare)
+	}
+}
+
+func TestListShowsTheBeginningOfTheTextAndCountsTheMessages(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	application := plain(i.LoggedCredentials()[0])
+	both := "Subject: Both\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBonjour Camille,\r\n\r\n  votre commande   est partie.\r\n" +
+		"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Bonjour <b>Camille</b></p>\r\n--b--\r\n"
+	htmlOnly := "Subject: HTML only\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<html><head><style>p{color:red}</style></head><body><p>Votre facture est disponible.</p></body></html>\r\n"
+	long := "Subject: Long\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + strings.Repeat("été ", 400) + "\r\n"
+	decorated := "Subject: Decorated\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+		"<h1>Big title</h1><p>Hello, <a href=\"https://example.com/reset?token=abc\">reset your password</a>.</p>" +
+		"<noscript>Enable scripts</noscript><svg><text>logo</text></svg><script>track()</script>\r\n"
+	blankText := "Subject: Blank text\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n   \r\n" +
+		"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Only the HTML has words.</p>\r\n--b--\r\n"
+
+	encoded := "Subject: Base64\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
+		base64.StdEncoding.EncodeToString([]byte("Bonjour, ceci est encodé.")) + "\r\n"
+	latin := "Subject: Latin\r\nContent-Type: text/plain; charset=iso-8859-1\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n" +
+		"Votre commande est pr=EAte.\r\n"
+	attached := "Subject: Attached\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=notes.txt\r\n\r\nNot the body.\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nThe body.\r\n--b--\r\n"
+
+	for name, data := range map[string]string{
+		"both": both, "HTML only": htmlOnly, "long": long, "decorated": decorated, "blank text": blankText,
+		"base64": encoded, "latin": latin, "attached": attached,
+	} {
+		if err := i.Submit(application, "app@staging.example", []string{"a@example.com"}, data); err != nil {
+			t.Fatalf("submit the %s Message: %v", name, err)
+		}
+	}
+
+	previews := map[string]string{}
+	for _, held := range member.Messages() {
+		previews[held.Subject] = held.Preview
+	}
+	if previews["Both"] != "Bonjour Camille, votre commande est partie." {
+		t.Errorf("preview of a Message with text and HTML = %q, want its text on one line", previews["Both"])
+	}
+	if previews["HTML only"] != "Votre facture est disponible." {
+		t.Errorf("preview of an HTML-only Message = %q, want its visible text", previews["HTML only"])
+	}
+	if long := previews["Long"]; !utf8.ValidString(long) || utf8.RuneCountInString(long) != 200 || !strings.HasPrefix(long, "été été") {
+		t.Errorf("preview of a long Message = %q, want its first 200 characters intact", long)
+	}
+	if previews["Decorated"] != "Big title Hello, reset your password." {
+		t.Errorf("preview of a decorated HTML Message = %q, want only its visible words", previews["Decorated"])
+	}
+	if previews["Blank text"] != "Only the HTML has words." {
+		t.Errorf("preview of a Message whose text part is blank = %q, want the words of its HTML", previews["Blank text"])
+	}
+	for subject, want := range map[string]string{
+		"Base64":   "Bonjour, ceci est encodé.",
+		"Latin":    "Votre commande est prête.",
+		"Attached": "The body.",
+	} {
+		if previews[subject] != want {
+			t.Errorf("preview of the %s Message = %q, want %q", subject, previews[subject], want)
+		}
+	}
+	var inboxes inboxList
+	member.Get("/api/inboxes").JSON(t, &inboxes)
+	if inboxes.Inboxes[0].MessageCount != 8 {
+		t.Errorf("the Inbox counts %d Messages, want 8", inboxes.Inboxes[0].MessageCount)
+	}
+}
+
+func TestDeeplyNestedMessageIsHeldWithoutDelay(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	var nested strings.Builder
+	nested.WriteString("Subject: Nested\r\n")
+	for level := range 6000 {
+		fmt.Fprintf(&nested, "Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n", level, level)
+	}
+	nested.WriteString("Content-Type: text/plain\r\n\r\nDeep.\r\n")
+
+	submitted := time.Now()
+	if err := i.Submit(plain(i.LoggedCredentials()[0]), "app@staging.example", []string{"a@example.com"}, nested.String()); err != nil {
+		t.Fatalf("submit a Message nested 6000 levels deep: %v", err)
+	}
+
+	if took := time.Since(submitted); took > 4*time.Second {
+		t.Errorf("holding a deeply nested Message took %s", took)
+	}
+	if held := member.Messages(); len(held) != 1 || held[0].Subject != "Nested" {
+		t.Fatalf("held Messages = %+v, want the nested one", held)
 	}
 }
 

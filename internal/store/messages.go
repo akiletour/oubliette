@@ -19,10 +19,11 @@ var ErrPosition = errors.New("malformed position in the Message list")
 var unknownInboxPassword = rand.Text()
 
 type Inbox struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Username string `json:"-"`
-	Password string `json:"-"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	MessageCount int    `json:"messageCount"`
+	Username     string `json:"-"`
+	Password     string `json:"-"`
 }
 
 type Message struct {
@@ -31,6 +32,7 @@ type Message struct {
 	EnvelopeSender     string    `json:"envelopeSender"`
 	EnvelopeRecipients []string  `json:"envelopeRecipients"`
 	Subject            string    `json:"subject"`
+	Preview            string    `json:"preview"`
 	Sender             string    `json:"sender"`
 	Recipients         []string  `json:"recipients"`
 	Size               int       `json:"size"`
@@ -49,7 +51,9 @@ func (s *Store) CreateInbox(ctx context.Context, name string, now time.Time) (In
 }
 
 func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, name FROM inboxes ORDER BY name COLLATE NOCASE, id")
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, (SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)
+		FROM inboxes ORDER BY name COLLATE NOCASE, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +61,7 @@ func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
 	inboxes := []Inbox{}
 	for rows.Next() {
 		var inbox Inbox
-		if err := rows.Scan(&inbox.ID, &inbox.Name); err != nil {
+		if err := rows.Scan(&inbox.ID, &inbox.Name, &inbox.MessageCount); err != nil {
 			return nil, err
 		}
 		inboxes = append(inboxes, inbox)
@@ -100,10 +104,11 @@ func encodeList(list []string) string {
 
 func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message, raw []byte) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages (id, inbox_id, received_at, envelope_sender, envelope_recipients, subject, sender, recipients, size, raw)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO messages
+			(id, inbox_id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size, raw)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newID(), inboxID, message.ReceivedAt.UnixMicro(), message.EnvelopeSender, encodeList(message.EnvelopeRecipients),
-		message.Subject, message.Sender, encodeList(message.Recipients), len(raw), raw)
+		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(raw), raw)
 	return err
 }
 
@@ -119,7 +124,7 @@ func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Me
 		beforeID = id
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, received_at, envelope_sender, envelope_recipients, subject, sender, recipients, size
+		`SELECT id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size
 		FROM messages
 		WHERE inbox_id = ?1 AND (?2 = '' OR (received_at, id) < (?3, ?4))
 		ORDER BY received_at DESC, id DESC
@@ -134,7 +139,7 @@ func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Me
 		var receivedAt int64
 		var envelopeRecipients, recipients string
 		if err := rows.Scan(&message.ID, &receivedAt, &message.EnvelopeSender, &envelopeRecipients,
-			&message.Subject, &message.Sender, &recipients, &message.Size); err != nil {
+			&message.Subject, &message.Preview, &message.Sender, &recipients, &message.Size); err != nil {
 			return nil, "", err
 		}
 		message.ReceivedAt = time.UnixMicro(receivedAt).UTC()

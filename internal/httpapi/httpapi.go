@@ -53,6 +53,9 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	})
 	mux.HandleFunc("POST /api/session", a.signIn)
 	mux.Handle("/api/", a.requireMember(signedIn))
+	mux.HandleFunc("GET /inboxes/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, ui, "index.html")
+	})
 	mux.Handle("/", http.FileServerFS(ui))
 	return http.NewCrossOriginProtection().Handler(mux)
 }
