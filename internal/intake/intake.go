@@ -12,6 +12,7 @@ import (
 	"github.com/jhillyerd/enmime/v2"
 
 	"oubliette/internal/content"
+	"oubliette/internal/live"
 	"oubliette/internal/store"
 )
 
@@ -24,12 +25,13 @@ var (
 
 type backend struct {
 	store *store.Store
+	hub   *live.Hub
 	now   func() time.Time
 	log   *slog.Logger
 }
 
-func NewServer(storage *store.Store, now func() time.Time, log *slog.Logger) *smtp.Server {
-	server := smtp.NewServer(&backend{store: storage, now: now, log: log})
+func NewServer(storage *store.Store, hub *live.Hub, now func() time.Time, log *slog.Logger) *smtp.Server {
+	server := smtp.NewServer(&backend{store: storage, hub: hub, now: now, log: log})
 	server.Domain = "oubliette"
 	server.AllowInsecureAuth = true
 	server.EnableSMTPUTF8 = true
@@ -143,10 +145,12 @@ func (s *session) Data(r io.Reader) error {
 	if len(message.Recipients) == 0 {
 		message.Recipients = s.recipients
 	}
-	if err := s.backend.store.HoldMessage(context.Background(), s.inbox.ID, message); err != nil {
+	id, err := s.backend.store.HoldMessage(context.Background(), s.inbox.ID, message)
+	if err != nil {
 		s.backend.log.Error("holding a Message failed", "inbox", s.inbox.ID, "error", err)
 		return errUnavailable
 	}
+	s.backend.hub.Received(s.inbox.ID, id)
 	return nil
 }
 

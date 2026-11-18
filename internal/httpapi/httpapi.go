@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"oubliette/internal/content"
+	"oubliette/internal/live"
 	"oubliette/internal/store"
 )
 
@@ -24,19 +25,21 @@ const (
 	sessionLifetime = 30 * 24 * time.Hour
 	signInAttempts  = 5
 	signInLockout   = 15 * time.Minute
+	heartbeat       = 25 * time.Second
 	renderingPolicy = "sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; " +
 		"img-src * data:; style-src * 'unsafe-inline'; font-src * data:"
 )
 
 type api struct {
 	store    *store.Store
+	hub      *live.Hub
 	now      func() time.Time
 	log      *slog.Logger
 	throttle throttle
 }
 
-func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
-	a := &api{store: storage, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
+func New(storage *store.Store, hub *live.Hub, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
+	a := &api{store: storage, hub: hub, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +54,7 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	mux.Handle("PATCH /api/inboxes/{inbox}", a.member(a.renameInbox))
 	mux.Handle("DELETE /api/inboxes/{inbox}", a.member(a.deleteInbox))
 	mux.Handle("GET /api/inboxes/{inbox}/messages", a.member(a.listMessages))
+	mux.Handle("GET /api/inboxes/{inbox}/events", a.member(a.streamEvents))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}", a.member(a.openMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/raw", a.member(a.showRaw))
@@ -61,6 +65,7 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 
 	mux.Handle("GET /api/share/{token}", a.visitor(a.showSharedInbox))
 	mux.Handle("GET /api/share/{token}/messages", a.visitor(a.listMessages))
+	mux.Handle("GET /api/share/{token}/events", a.visitor(a.streamEvents))
 	mux.Handle("GET /api/share/{token}/messages/{message}", a.visitor(a.openMessage))
 	mux.Handle("GET /api/share/{token}/messages/{message}/rendered", a.visitor(a.renderMessage))
 	mux.Handle("GET /api/share/{token}/messages/{message}/raw", a.visitor(a.showRaw))
@@ -209,6 +214,7 @@ func (a *api) renameInbox(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
 	if !a.refused(w, r, a.store.DeleteInbox(r.Context(), r.PathValue("inbox"))) {
+		a.hub.ScopeChanged(r.PathValue("inbox"))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -241,6 +247,7 @@ func (a *api) listShareLinks(w http.ResponseWriter, r *http.Request) {
 func (a *api) revokeShareLink(w http.ResponseWriter, r *http.Request) {
 	err := a.store.RevokeShareLink(r.Context(), r.PathValue("inbox"), r.PathValue("link"), a.now())
 	if !a.refused(w, r, err) {
+		a.hub.ScopeChanged(r.PathValue("inbox"))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -272,7 +279,7 @@ func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		return
 	}
-	messages, next, err := a.store.Messages(r.Context(), inbox.ID, r.URL.Query().Get("before"))
+	messages, next, err := a.store.Messages(r.Context(), inbox.ID, r.URL.Query().Get("q"), r.URL.Query().Get("before"))
 	if errors.Is(err, store.ErrPosition) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -282,6 +289,47 @@ func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "next": next})
+}
+
+func (a *api) streamEvents(w http.ResponseWriter, r *http.Request) {
+	inbox, found := a.inboxInScope(w, r)
+	if !found {
+		return
+	}
+	received, stop := a.hub.Listen(inbox.ID)
+	defer stop()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	stream := http.NewResponseController(w)
+	beat := time.NewTicker(heartbeat)
+	defer beat.Stop()
+	for frame := ": connected\n\n"; ; {
+		if _, err := io.WriteString(w, frame); err != nil {
+			return
+		}
+		if err := stream.Flush(); err != nil {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case messageID := <-received:
+			frame = ""
+			if messageID != "" {
+				frame = "event: received\ndata: {\"id\":" + strconv.Quote(messageID) + "}\n\n"
+			}
+		case <-beat.C:
+			frame = ": heartbeat\n\n"
+		}
+		inScope, err := a.stillInScope(r, inbox.ID)
+		if err != nil {
+			a.log.Error("checking the scope of an event stream failed", "inbox", inbox.ID, "error", err)
+		}
+		if !inScope {
+			return
+		}
+	}
 }
 
 func (a *api) heldMessage(w http.ResponseWriter, r *http.Request) (store.Message, bool) {

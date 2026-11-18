@@ -12,6 +12,7 @@ import (
 
 	"oubliette/internal/httpapi"
 	"oubliette/internal/intake"
+	"oubliette/internal/live"
 	"oubliette/internal/store"
 	"oubliette/web"
 )
@@ -59,17 +60,21 @@ func Start(cfg Config) (*Server, error) {
 		storage.Close()
 		return nil, err
 	}
+	hub := live.NewHub()
+	streaming, endStreams := context.WithCancel(context.Background())
 	server := &Server{
 		store: storage,
 		http: &http.Server{
-			Handler:           httpapi.New(storage, web.Dist(), cfg.Now, cfg.Log),
+			Handler:           httpapi.New(storage, hub, web.Dist(), cfg.Now, cfg.Log),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(cfg.Log.Handler(), slog.LevelError),
+			BaseContext:       func(net.Listener) context.Context { return streaming },
 		},
 		httpAddr: httpListener.Addr().String(),
-		smtp:     intake.NewServer(storage, cfg.Now, cfg.Log),
+		smtp:     intake.NewServer(storage, hub, cfg.Now, cfg.Log),
 		smtpAddr: smtpListener.Addr().String(),
 	}
+	server.http.RegisterOnShutdown(endStreams)
 	go func() {
 		if err := server.http.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {
 			cfg.Log.Error("http server stopped", "error", err)

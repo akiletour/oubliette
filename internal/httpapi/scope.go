@@ -68,6 +68,20 @@ func (a *api) visitor(next http.HandlerFunc) http.Handler {
 	})
 }
 
+func (a *api) stillInScope(r *http.Request, inboxID string) (bool, error) {
+	current := scopeOf(r)
+	if current.shared != nil {
+		inbox, found, err := a.store.OpenShareLink(r.Context(), r.PathValue("token"), a.now())
+		return found && inbox.ID == inboxID, err
+	}
+	_, valid, err := a.store.SessionMember(r.Context(), current.session.token, a.now())
+	if err != nil || !valid {
+		return false, err
+	}
+	_, found, err := a.store.Inbox(r.Context(), inboxID)
+	return found, err
+}
+
 func (a *api) inboxInScope(w http.ResponseWriter, r *http.Request) (store.Inbox, bool) {
 	if shared := scopeOf(r).shared; shared != nil {
 		return *shared, true

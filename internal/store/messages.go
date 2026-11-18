@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -14,8 +15,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/collate"
 	"golang.org/x/text/language"
+	"golang.org/x/text/unicode/norm"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -181,14 +185,15 @@ func encodeList(list []string) string {
 	return string(encoded)
 }
 
-func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message) error {
+func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message) (string, error) {
+	id := newID()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages
 			(id, inbox_id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size, raw)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		newID(), inboxID, message.ReceivedAt.UnixMicro(), message.EnvelopeSender, encodeList(message.EnvelopeRecipients),
+		id, inboxID, message.ReceivedAt.UnixMicro(), message.EnvelopeSender, encodeList(message.EnvelopeRecipients),
 		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(message.Raw), message.Raw)
-	return err
+	return id, err
 }
 
 const messageCount = "(SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)"
@@ -222,7 +227,21 @@ func (s *Store) Message(ctx context.Context, inboxID, id string) (Message, bool,
 	return message, err == nil, err
 }
 
-func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Message, next string, err error) {
+func fold(text string) string {
+	return cases.Fold().String(norm.NFC.String(text))
+}
+
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("fold", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		text, isText := args[0].(string)
+		if !isText {
+			return args[0], nil
+		}
+		return fold(text), nil
+	})
+}
+
+func (s *Store) Messages(ctx context.Context, inboxID, query, before string) (page []Message, next string, err error) {
 	var beforeTime int64
 	var beforeID string
 	if before != "" {
@@ -236,8 +255,10 @@ func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Me
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+messageColumns+` FROM messages
 		WHERE inbox_id = ?1 AND (?2 = '' OR (received_at, id) < (?3, ?4))
+		AND (?6 = '' OR instr(fold(subject), ?6) OR instr(fold(sender), ?6)
+			OR EXISTS (SELECT 1 FROM json_each(recipients) WHERE instr(fold(value), ?6)))
 		ORDER BY received_at DESC, id DESC
-		LIMIT ?5`, inboxID, before, beforeTime, beforeID, pageSize+1)
+		LIMIT ?5`, inboxID, before, beforeTime, beforeID, pageSize+1, fold(query))
 	if err != nil {
 		return nil, "", err
 	}

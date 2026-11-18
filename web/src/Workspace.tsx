@@ -3,7 +3,7 @@ import { dayLabel, relativeTime, t } from './i18n'
 import { fromTo, getJSON, messageAt, useMinuteTick, type Message } from './messages'
 import { link } from './router'
 import { Stage, type Width } from './Stage'
-import { Eyebrow, Mark, cn, pressable } from './ui'
+import { Eyebrow, FilterField, Mark, cn, pressable, textLink } from './ui'
 
 export type Place = { key: string; name: string; messageCount: number; api: string; page: string }
 
@@ -82,10 +82,63 @@ export function Workspace({
   )
 }
 
+type Page = { messages: Message[]; next: string }
+
+const filterDelay = 200
+const reconnectDelay = 5_000
+const freshFor = 6_000
+
+function useDebounced<T>(value: T, delay: number) {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return settled
+}
+
+function useLiveInbox(api: string, onChange: (received?: string) => void) {
+  const [live, setLive] = useState(true)
+  const [attempt, setAttempt] = useState(0)
+  const latestOnChange = useRef(onChange)
+  useEffect(() => {
+    latestOnChange.current = onChange
+  })
+  useEffect(() => {
+    let reopened = attempt > 0
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const source = new EventSource(`${api}/events`)
+    source.onopen = () => {
+      setLive(true)
+      if (reopened) latestOnChange.current()
+      reopened = true
+    }
+    source.addEventListener('received', (event) => latestOnChange.current(JSON.parse(event.data).id))
+    source.onerror = () => {
+      setLive(false)
+      if (source.readyState !== EventSource.CLOSED) return
+      latestOnChange.current()
+      retry = setTimeout(() => setAttempt((count) => count + 1), reconnectDelay)
+    }
+    return () => {
+      source.close()
+      clearTimeout(retry)
+    }
+  }, [api, attempt])
+  return live
+}
+
+function withFirstPage(held: Page, page: Page): Page {
+  const last = page.messages.at(-1)
+  const at = last && page.next ? held.messages.findIndex((message) => message.id === last.id) : -1
+  return at === -1 ? page : { messages: [...page.messages, ...held.messages.slice(at + 1)], next: held.next }
+}
+
 export function MessageList({
   place,
   openId,
   onSessionEnd,
+  onLiveChange,
   nameAction,
   actions,
   note,
@@ -94,31 +147,45 @@ export function MessageList({
   place: Place
   openId?: string
   onSessionEnd: () => void
+  onLiveChange?: () => void
   nameAction?: ReactNode
   actions?: ReactNode
   note?: string
   emptyHint: string
 }) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [next, setNext] = useState('')
+  const [list, setList] = useState<Page>({ messages: [], next: '' })
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [query, setQuery] = useState('')
+  const filter = useDebounced(query.trim(), filterDelay)
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
+  const lastLoad = useRef(0)
   useMinuteTick()
 
-  async function load(before: string) {
-    setStatus('loading')
+  async function load(before: string, refresh = false) {
+    const call = ++lastLoad.current
+    if (!refresh) setStatus('loading')
     try {
-      const page = await getJSON<{ messages: Message[]; next: string }>(`${place.api}/messages?before=${encodeURIComponent(before)}`, onSessionEnd)
-      setMessages((held) => (before ? [...held, ...page.messages] : page.messages))
-      setNext(page.next)
+      const page = await getJSON<Page>(`${place.api}/messages?q=${encodeURIComponent(filter)}&before=${encodeURIComponent(before)}`, onSessionEnd)
+      if (call !== lastLoad.current) return
+      setList((held) => (before ? { messages: [...held.messages, ...page.messages], next: page.next } : refresh ? withFirstPage(held, page) : page))
       setStatus('ready')
     } catch {
-      setStatus('failed')
+      if (call === lastLoad.current) setStatus('failed')
     }
   }
 
+  const live = useLiveInbox(place.api, (received) => {
+    if (received) {
+      setFresh((ids) => new Set(ids).add(received))
+      setTimeout(() => setFresh((ids) => new Set([...ids].filter((id) => id !== received))), freshFor)
+    }
+    load('', true)
+    onLiveChange?.()
+  })
+
   useEffect(() => {
     load('')
-  }, [])
+  }, [filter])
 
   return (
     <>
@@ -128,13 +195,15 @@ export function MessageList({
           <h1 className="truncate text-heading font-semibold">{place.name}</h1>
           {nameAction}
         </div>
-        <div className="mt-1 flex min-h-5 items-center">
-          <p className="text-label text-fg-muted tabular-nums">
+        <div className="mt-1 flex min-h-5 items-center gap-3">
+          <p className="truncate text-label text-fg-muted tabular-nums">
             {t.messageCount(place.messageCount)}
             {note && ` · ${note}`}
           </p>
+          <LiveStatus live={live} />
           {actions && <div className="-my-1.5 ml-auto flex">{actions}</div>}
         </div>
+        <FilterField label={t.filterMessages} value={query} onChange={setQuery} className="mt-3" />
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {status === 'failed' && (
@@ -142,26 +211,41 @@ export function MessageList({
             {t.loadFailed}
           </p>
         )}
-        {status === 'ready' && messages.length === 0 && (
+        {status === 'ready' && list.messages.length === 0 && filter && (
+          <div className="flex flex-col items-start gap-1 p-3">
+            <p className="font-medium break-words">{t.noMessageMatches(filter)}</p>
+            <p className="text-fg-muted">{t.filterHint}</p>
+            <button type="button" onClick={() => setQuery('')} className={cn(textLink, 'mt-1')}>
+              {t.clearFilter}
+            </button>
+          </div>
+        )}
+        {status === 'ready' && list.messages.length === 0 && !filter && (
           <div className="p-3">
             <p className="font-medium">{t.emptyInbox}</p>
             <p className="mt-1 text-fg-muted">{emptyHint}</p>
           </div>
         )}
-        {groupByDay(messages).map(([day, received]) => (
+        {groupByDay(list.messages).map(([day, received]) => (
           <section key={day} aria-label={day}>
             <Eyebrow className="px-3 pt-3 pb-1.5">{day}</Eyebrow>
             <ul className="flex flex-col gap-0.5">
               {received.map((message) => (
-                <Row key={message.id} message={message} path={messageAt(place.page, message.id)} selected={message.id === openId} />
+                <Row
+                  key={message.id}
+                  message={message}
+                  path={messageAt(place.page, message.id)}
+                  selected={message.id === openId}
+                  fresh={fresh.has(message.id)}
+                />
               ))}
             </ul>
           </section>
         ))}
-        {next && (
+        {list.next && (
           <button
             type="button"
-            onClick={() => load(next)}
+            onClick={() => load(list.next)}
             disabled={status === 'loading'}
             className={cn(pressable, 'relative mt-2 h-8 w-full text-label font-medium before:absolute before:inset-x-0 before:-inset-y-1 max-md:h-11 max-md:before:hidden')}
           >
@@ -170,6 +254,15 @@ export function MessageList({
         )}
       </div>
     </>
+  )
+}
+
+function LiveStatus({ live }: { live: boolean }) {
+  return (
+    <span role="status" title={live ? t.liveHint : undefined} className="flex shrink-0 items-center gap-1.5 text-label text-fg-muted">
+      <span aria-hidden className={cn('size-1.5 rounded-full transition-[background-color] duration-(--duration-base) ease-out', live ? 'bg-positive' : 'bg-fg-disabled')} />
+      {live ? t.live : t.reconnecting}
+    </span>
   )
 }
 
@@ -182,23 +275,32 @@ function groupByDay(messages: Message[]) {
   return [...days]
 }
 
-function Row({ message, path, selected }: { message: Message; path: string; selected: boolean }) {
+function Row({ message, path, selected, fresh }: { message: Message; path: string; selected: boolean; fresh: boolean }) {
   return (
-    <li>
-      <a
-        {...link(path)}
-        aria-current={selected ? 'true' : undefined}
-        className="flex min-h-row flex-col justify-center gap-0.5 rounded-md px-3 py-2.5 transition-[background-color] duration-(--duration-fast) ease-out hover:bg-hover aria-[current=true]:bg-selected"
-      >
-        <span className="flex items-baseline gap-2">
-          <span className={cn('truncate font-medium', !message.subject && 'text-fg-muted')}>{message.subject || t.noSubject}</span>
-          <time dateTime={message.receivedAt} className="ml-auto shrink-0 text-caption text-fg-subtle tabular-nums">
-            {relativeTime(new Date(message.receivedAt))}
-          </time>
-        </span>
-        <span className="truncate text-label text-fg-muted">{fromTo(message)}</span>
-        <span className="truncate text-label text-fg-subtle">{message.preview}</span>
-      </a>
+    <li className={cn('grid grid-rows-[1fr]', fresh && 'transition-[grid-template-rows] duration-(--duration-slow) ease-out starting:grid-rows-[0fr]')}>
+      <div className="min-h-0 overflow-hidden">
+        <a
+          {...link(path)}
+          aria-current={selected ? 'true' : undefined}
+          className={cn(
+            'flex min-h-row flex-col justify-center gap-0.5 rounded-md px-3 py-2.5 -outline-offset-2 transition-[background-color,translate,scale,opacity] ease-out hover:bg-hover aria-[current=true]:bg-selected',
+            fresh ? 'duration-(--duration-slow) starting:-translate-y-2 starting:scale-[0.98] starting:opacity-0' : 'duration-(--duration-fast)',
+          )}
+        >
+          <span className="flex items-baseline gap-2">
+            <span className={cn('truncate font-medium', !message.subject && 'text-fg-muted')}>{message.subject || t.noSubject}</span>
+            {fresh ? (
+              <span className="ml-auto shrink-0 rounded-full bg-accent-soft px-1.5 text-caption font-medium text-accent">{t.fresh}</span>
+            ) : (
+              <time dateTime={message.receivedAt} className="ml-auto shrink-0 text-caption text-fg-subtle tabular-nums">
+                {relativeTime(new Date(message.receivedAt))}
+              </time>
+            )}
+          </span>
+          <span className="truncate text-label text-fg-muted">{fromTo(message)}</span>
+          <span className="truncate text-label text-fg-subtle">{message.preview}</span>
+        </a>
+      </div>
     </li>
   )
 }

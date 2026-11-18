@@ -100,6 +100,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
             place={place}
             openId={messageId}
             onSessionEnd={onSessionChange}
+            onLiveChange={loadInboxes}
             emptyHint={t.emptyInboxHint}
             nameAction={
               <IconButton label={t.switchInbox} onClick={() => setDialog('switch')} className="-ml-1 lg:hidden">

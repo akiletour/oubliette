@@ -12,13 +12,17 @@ const ignore = () => {}
 export function Visitor() {
   const [, token = '', messageId] = route.exec(usePath()) ?? []
   const [shared, setShared] = useState<Place | 'gone' | 'failed'>()
+  const [revision, setRevision] = useState(0)
 
   useEffect(() => {
     getJSON<{ name: string; messageCount: number }>(`/api/share/${token}`, ignore).then(
       (inbox) => setShared({ key: token, name: inbox.name, messageCount: inbox.messageCount, api: `/api/share/${token}`, page: `/s/${token}` }),
-      (error) => setShared(error instanceof RequestFailed && error.status === 404 ? 'gone' : 'failed'),
+      (error) => {
+        const gone = error instanceof RequestFailed && error.status === 404
+        setShared((current) => (gone ? 'gone' : (current ?? 'failed')))
+      },
     )
-  }, [token, messageId])
+  }, [token, messageId, revision])
 
   if (shared === undefined) return null
   if (shared === 'gone' || shared === 'failed') {
@@ -46,7 +50,12 @@ export function Visitor() {
           </span>
         }
       >
-        <MessageList place={shared} openId={messageId} onSessionEnd={ignore} note={t.readOnly} emptyHint={t.emptyInboxVisitorHint} />
+        <MessageList
+          place={shared}
+          openId={messageId}
+          onSessionEnd={ignore}
+          onLiveChange={() => setRevision((count) => count + 1)}
+          note={t.readOnly} emptyHint={t.emptyInboxVisitorHint} />
       </Workspace>
     </div>
   )
