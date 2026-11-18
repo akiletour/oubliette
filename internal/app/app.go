@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,8 +21,6 @@ import (
 	"oubliette/internal/store"
 	"oubliette/web"
 )
-
-const smtpDrain = 2 * time.Second
 
 type Config struct {
 	DataFile           string
@@ -44,7 +43,7 @@ type Server struct {
 	store     *store.Store
 	http      *http.Server
 	httpAddr  string
-	smtp      *smtp.Server
+	smtp      *intake.Server
 	smtpAddr  string
 	stopPurge func()
 }
@@ -153,9 +152,12 @@ func (s *Server) SMTPAddr() string {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	draining, cancel := context.WithTimeout(ctx, smtpDrain)
-	defer cancel()
-	s.smtp.Shutdown(draining)
+	httpStopped := make(chan error, 1)
+	go func() { httpStopped <- s.http.Shutdown(ctx) }()
+	var smtpStopped error
+	if err := s.smtp.Shutdown(ctx); err != nil {
+		smtpStopped = fmt.Errorf("the SMTP server stopped before every Message arriving was held: %w", err)
+	}
 	s.stopPurge()
-	return errors.Join(s.http.Shutdown(ctx), s.store.Close())
+	return errors.Join(smtpStopped, <-httpStopped, s.store.Close())
 }

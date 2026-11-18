@@ -127,10 +127,16 @@ func TestServerRefusesToStartWithoutACertificateOrTheInsecureAuthenticationOverr
 func TestServerRefusesAnUnreadableInsecureAuthenticationOverride(t *testing.T) {
 	t.Parallel()
 
-	code, refusal := serveWith(t, map[string]string{"OUBLIETTE_SMTP_INSECURE_AUTH": "yes"})
+	cert := newCertificate(t)
 
-	if code == 0 || !strings.Contains(refusal, "OUBLIETTE_SMTP_INSECURE_AUTH") {
-		t.Fatalf("an unreadable override gave exit %d and %q, want a refusal naming the variable", code, refusal)
+	for name, args := range map[string][]string{
+		"without a certificate": nil,
+		"with a certificate":    {"--smtp-tls-cert", cert.certFile, "--smtp-tls-key", cert.keyFile},
+	} {
+		code, refusal := serveWith(t, map[string]string{"OUBLIETTE_SMTP_INSECURE_AUTH": "yes"}, args...)
+		if code == 0 || !strings.Contains(refusal, "OUBLIETTE_SMTP_INSECURE_AUTH must be true or false") {
+			t.Errorf("an unreadable override %s gave exit %d and %q, want a refusal naming the variable", name, code, refusal)
+		}
 	}
 }
 

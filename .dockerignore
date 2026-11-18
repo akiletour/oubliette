@@ -1,0 +1,14 @@
+.git
+.gstack
+.scratch
+.claude
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+/oubliette
+/prototype
+/tasks
+/web/node_modules
+/web/dist

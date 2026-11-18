@@ -32,6 +32,8 @@ Commands:
 Flags:
 `
 
+const stopBudget = 8 * time.Second
+
 var errUsage = errors.New("usage")
 
 func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -46,7 +48,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		"address the web interface listens on (OUBLIETTE_HTTP_ADDR)")
 	smtpAddr := flags.String("smtp-addr", cmp.Or(getenv("OUBLIETTE_SMTP_ADDR"), ":1025"),
 		"address the SMTP server listens on (OUBLIETTE_SMTP_ADDR)")
-	insecureAuthFromEnv, _ := strconv.ParseBool(getenv("OUBLIETTE_SMTP_INSECURE_AUTH"))
+	insecureAuthFromEnv, insecureAuthUnreadable := envBool(getenv, "OUBLIETTE_SMTP_INSECURE_AUTH")
 	insecureAuth := flags.Bool("smtp-insecure-auth", insecureAuthFromEnv,
 		"accept SMTP authentication without encryption (OUBLIETTE_SMTP_INSECURE_AUTH)")
 	tlsCert := flags.String("smtp-tls-cert", getenv("OUBLIETTE_SMTP_TLS_CERT"),
@@ -79,7 +81,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			Now:                time.Now,
 			Log:                slog.New(slog.NewTextHandler(stdout, nil)),
 		})
-		if err == nil {
+		if err = errors.Join(insecureAuthUnreadable, err); err == nil {
 			err = serve(ctx, cfg)
 		}
 	case len(args) > 1 && args[0] == "member":
@@ -96,6 +98,18 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	return 0
 }
 
+func envBool(getenv func(string) string, variable string) (bool, error) {
+	text := getenv(variable)
+	if text == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(text)
+	if err != nil {
+		return false, errors.New(variable + " must be true or false")
+	}
+	return value, nil
+}
+
 func serve(ctx context.Context, cfg Config) error {
 	server, err := Start(cfg)
 	if err != nil {
@@ -103,7 +117,7 @@ func serve(ctx context.Context, cfg Config) error {
 	}
 	<-ctx.Done()
 	cfg.Log.Info("shutting down")
-	stopping, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	stopping, cancel := context.WithTimeout(context.Background(), stopBudget)
 	defer cancel()
 	return server.Stop(stopping)
 }

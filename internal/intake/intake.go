@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -22,6 +24,7 @@ const maxLineLength = 1 << 20
 var (
 	errAuthRequired = &smtp.SMTPError{Code: 530, EnhancedCode: smtp.EnhancedCode{5, 7, 0}, Message: "Authentication required"}
 	errUnavailable  = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary failure, try again later"}
+	errStopping     = &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Shutting down, try again later"}
 )
 
 type Rules struct {
@@ -32,15 +35,24 @@ type Rules struct {
 }
 
 type backend struct {
-	rules Rules
-	store *store.Store
-	hub   *live.Hub
-	now   func() time.Time
-	log   *slog.Logger
+	rules       Rules
+	store       *store.Store
+	hub         *live.Hub
+	now         func() time.Time
+	log         *slog.Logger
+	mu          sync.Mutex
+	stopping    bool
+	connections map[*connection]struct{}
 }
 
-func NewServer(storage *store.Store, hub *live.Hub, rules Rules, now func() time.Time, log *slog.Logger) *smtp.Server {
-	server := smtp.NewServer(&backend{rules: rules, store: storage, hub: hub, now: now, log: log})
+type Server struct {
+	smtp    *smtp.Server
+	backend *backend
+}
+
+func NewServer(storage *store.Store, hub *live.Hub, rules Rules, now func() time.Time, log *slog.Logger) *Server {
+	intake := &backend{rules: rules, store: storage, hub: hub, now: now, log: log, connections: map[*connection]struct{}{}}
+	server := smtp.NewServer(intake)
 	server.Domain = "oubliette"
 	server.TLSConfig = rules.Encryption
 	server.AllowInsecureAuth = rules.InsecureAuth
@@ -50,15 +62,100 @@ func NewServer(storage *store.Store, hub *live.Hub, rules Rules, now func() time
 	server.ReadTimeout = time.Minute
 	server.WriteTimeout = time.Minute
 	server.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelError)
-	return server
+	return &Server{smtp: server, backend: intake}
 }
 
-func (b *backend) NewSession(*smtp.Conn) (smtp.Session, error) {
-	return &session{backend: b}, nil
+func (s *Server) Serve(l net.Listener) error {
+	return s.smtp.Serve(listener{Listener: l, backend: s.backend})
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.backend.stop()
+	return s.smtp.Shutdown(ctx)
+}
+
+type listener struct {
+	net.Listener
+	backend *backend
+}
+
+func (l listener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return l.backend.track(conn), nil
+}
+
+type connection struct {
+	net.Conn
+	backend       *backend
+	inTransaction bool
+}
+
+func (c *connection) Close() error {
+	c.backend.forget(c)
+	return c.Conn.Close()
+}
+
+func (b *backend) track(conn net.Conn) *connection {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopping {
+		conn.Close()
+	}
+	tracked := &connection{Conn: conn, backend: b}
+	b.connections[tracked] = struct{}{}
+	return tracked
+}
+
+func (b *backend) forget(c *connection) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.connections, c)
+}
+
+func (b *backend) stop() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopping = true
+	for c := range b.connections {
+		if !c.inTransaction {
+			c.Conn.Close()
+		}
+	}
+}
+
+func (b *backend) begin(c *connection) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopping {
+		return errStopping
+	}
+	c.inTransaction = true
+	return nil
+}
+
+func (b *backend) end(c *connection) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c.inTransaction = false
+	if b.stopping {
+		c.Conn.Close()
+	}
+}
+
+func (b *backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
+	conn := c.Conn()
+	if encrypted, isEncrypted := conn.(*tls.Conn); isEncrypted {
+		conn = encrypted.NetConn()
+	}
+	return &session{backend: b, connection: conn.(*connection)}, nil
 }
 
 type session struct {
 	backend            *backend
+	connection         *connection
 	inbox              *store.Inbox
 	username, password string
 	sender             string
@@ -117,6 +214,9 @@ func (s *session) Mail(from string, _ *smtp.MailOptions) error {
 		return errAuthRequired
 	}
 	if err := s.authenticate(s.username, s.password); err != nil {
+		return err
+	}
+	if err := s.backend.begin(s.connection); err != nil {
 		return err
 	}
 	s.sender, s.recipients = from, nil
@@ -189,6 +289,7 @@ func displayed(header string) []string {
 
 func (s *session) Reset() {
 	s.sender, s.recipients = "", nil
+	s.backend.end(s.connection)
 }
 
 func (s *session) Logout() error {

@@ -1,7 +1,7 @@
 .PHONY: build test
 
 build: web/dist
-	go build -o oubliette .
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o oubliette .
 
 test: web/dist
 	go vet ./...

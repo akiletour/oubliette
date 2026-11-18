@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/textproto"
@@ -755,19 +756,25 @@ func TestStopDoesNotWaitForAnIdleApplication(t *testing.T) {
 	if _, err := i.Connect(plain(i.LoggedCredentials()[0])); err != nil {
 		t.Fatal(err)
 	}
+	silent, err := net.Dial("tcp", i.SMTPAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	if _, err := silent.Read(make([]byte, 512)); err != nil {
+		t.Fatal(err)
+	}
 
-	stopped := make(chan error, 1)
-	go func() { stopped <- i.server.Stop(context.Background()) }()
+	stopped := i.StopInBackground()
 
 	select {
 	case err := <-stopped:
 		if err != nil {
 			t.Errorf("stop with an idle SMTP connection: %v", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(time.Second):
 		t.Fatal("the server waits for an idle SMTP connection to stop")
 	}
-	i.boot()
 }
 
 func TestFailedStartDoesNotUseUpTheFirstInbox(t *testing.T) {

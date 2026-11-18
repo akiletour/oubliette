@@ -199,8 +199,7 @@ func TestStopDoesNotWaitForAnOpenEventStream(t *testing.T) {
 	member := i.SignedInMember()
 	member.Stream("/api/inboxes/" + member.InboxID())
 
-	stopped := make(chan error, 1)
-	go func() { stopped <- i.server.Stop(context.Background()) }()
+	stopped := i.StopInBackground()
 
 	select {
 	case err := <-stopped:

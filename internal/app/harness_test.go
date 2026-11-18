@@ -389,9 +389,20 @@ func (i *instance) SignedInMember() *browser {
 
 func (i *instance) stop() {
 	i.t.Helper()
-	if err := i.server.Stop(context.Background()); err != nil {
+	if err := <-i.StopInBackground(); err != nil {
 		i.t.Errorf("stop server: %v", err)
 	}
+}
+
+func (i *instance) StopInBackground() <-chan error {
+	server, stopped := i.server, make(chan error, 1)
+	i.server = nil
+	if server == nil {
+		stopped <- nil
+		return stopped
+	}
+	go func() { stopped <- server.Stop(context.Background()) }()
+	return stopped
 }
 
 func (i *instance) Restart() {
