@@ -3,8 +3,8 @@
 An oubliette is a dungeon you drop into through a trapdoor in the ceiling, and nobody comes back out. This one is for email. Your staging sites send their mail to it over SMTP, it keeps every Message, and none of them ever reaches a real person.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/main-dark.webp">
-  <img alt="The Oubliette interface: the Inbox list on the left, the Messages of the Harbour Bakery staging Inbox in the middle, and an order confirmation email rendered on the right." src="docs/screenshots/main-light.webp">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/main-dark.webp">
+  <img alt="The Oubliette interface: the Inbox list on the left, the Messages of the Harbour Bakery staging Inbox in the middle, and an order confirmation email rendered on the right." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/main-light.webp">
 </picture>
 
 Each staging Application gets its own Inbox, chosen by the Credentials it signs in with. The agency's Members see every Inbox. A customer gets a Share Link to their own Inbox and reads their emails without an account, so nobody has to forward screenshots any more.
@@ -21,31 +21,32 @@ The theme follows your system, or the moon button. The language follows the brow
 
 ### What the Application actually sent
 
-<img alt="The details panel of an invoice email, listing the sender, the size, a PDF attachment, the SMTP envelope and every header." src="docs/screenshots/inspector-light.webp">
+<img alt="The details panel of an invoice email, listing the sender, the size, a PDF attachment, the SMTP envelope and every header." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/inspector-light.webp">
 
 The details panel shows the headers, the attachments and the SMTP envelope. The envelope is where the surprises are: a recipient in `RCPT TO` who appears in no header is a Bcc your template didn't mean to send. Attachments always download, with a neutral type, so nothing in them runs in the browser.
 
 ### Plugging in an Application
 
-<img alt="The Integration tab of an Inbox, with the SMTP host, port, username and password, each with a copy button, and a block of environment variables." src="docs/screenshots/integration-light.webp">
+<img alt="The Integration tab of an Inbox, with the SMTP host, port, username and password, each with a copy button, and a block of environment variables." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/integration-light.webp">
 
 The Integration tab gives the host, port, username and password, and the same four as environment variables to paste into the Application's `.env`. Regenerating them refuses the old pair at once, even on a connection that is already open.
 
 ### What the customer sees
 
-<img width="720" alt="A Share Link opened on a phone: the read-only list of the Harbour Bakery Inbox, and the welcome email opened at mobile width." src="docs/screenshots/visitor.webp">
+<img width="720" alt="A Share Link opened on a phone: the read-only list of the Harbour Bakery Inbox, and the welcome email opened at mobile width." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/visitor.webp">
 
 A Share Link opens one Inbox, read-only, on a laptop or a phone. It can expire on a date, an Inbox can have several, and revoking one leaves the others working. The sharing tab shows when each link was last opened.
 
 ## Try it on your machine
 
-Build the image and start it without encryption, which is fine on your own machine:
+Start it without encryption, which is fine on your own machine:
 
 ```sh
-docker build -t oubliette .
 docker run -d --name oubliette -p 8080:8080 -p 1025:1025 \
-  -e OUBLIETTE_SMTP_INSECURE_AUTH=true oubliette
+  -e OUBLIETTE_SMTP_INSECURE_AUTH=true akiletour/oubliette
 ```
+
+The image is on Docker Hub as `akiletour/oubliette` and on GitHub as `ghcr.io/akiletour/oubliette`, for amd64 and arm64.
 
 Create yourself a Member. It asks for the password twice:
 
@@ -77,7 +78,7 @@ docker run -d --name oubliette \
   -v /etc/oubliette/tls:/tls:ro \
   -e OUBLIETTE_SMTP_TLS_CERT=/tls/tls.crt \
   -e OUBLIETTE_SMTP_TLS_KEY=/tls/tls.key \
-  oubliette
+  akiletour/oubliette
 ```
 
 The image runs as the non-root user 65532 and keeps its data file at `/data/oubliette.db`. A named volume works as is. A host directory mounted on `/data` must be writable by user 65532, and the certificate files must be readable by that user.
@@ -152,7 +153,7 @@ To restore, put the copy back as the data file while the server is stopped.
 make build
 ```
 
-This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 24. `make test` runs `go vet` and the tests, which drive a real server over real SMTP and HTTP.
+This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 24. `docker build -t oubliette .` builds the image instead and needs only Docker. `make test` runs `go vet` and the tests, which drive a real server over real SMTP and HTTP.
 
 ## What it won't do
 
