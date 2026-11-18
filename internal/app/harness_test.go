@@ -207,24 +207,89 @@ func (i *instance) Capture(data string) {
 func (b *browser) InboxID() string {
 	t := b.i.t
 	t.Helper()
-	var inboxes inboxList
-	b.Get("/api/inboxes").JSON(t, &inboxes)
-	if len(inboxes.Inboxes) != 1 {
-		t.Fatalf("got %d Inboxes, want 1", len(inboxes.Inboxes))
+	inboxes := b.Inboxes()
+	if len(inboxes) != 1 {
+		t.Fatalf("got %d Inboxes, want 1", len(inboxes))
 	}
-	return inboxes.Inboxes[0].ID
+	return inboxes[0].ID
+}
+
+func (b *browser) PageOf(inboxID, before string) messageList {
+	b.i.t.Helper()
+	var page messageList
+	b.Get("/api/inboxes/"+inboxID+"/messages?before="+before).JSON(b.i.t, &page)
+	return page
 }
 
 func (b *browser) MessagePage(before string) messageList {
 	b.i.t.Helper()
-	var page messageList
-	b.Get("/api/inboxes/"+b.InboxID()+"/messages?before="+before).JSON(b.i.t, &page)
-	return page
+	return b.PageOf(b.InboxID(), before)
 }
 
 func (b *browser) MessagePath(id string) string {
 	b.i.t.Helper()
 	return "/api/inboxes/" + b.InboxID() + "/messages/" + id
+}
+
+type createdInbox struct {
+	ID           string
+	Name         string
+	SMTPUsername string `json:"smtpUsername"`
+	SMTPPassword string `json:"smtpPassword"`
+}
+
+func (c createdInbox) Credentials() credentials {
+	return credentials{c.SMTPUsername, c.SMTPPassword}
+}
+
+func named(name string) string {
+	body, _ := json.Marshal(map[string]string{"name": name})
+	return string(body)
+}
+
+func (b *browser) CreateInbox(name string) createdInbox {
+	t := b.i.t
+	t.Helper()
+	created := b.Do(http.MethodPost, "/api/inboxes", named(name))
+	if created.Status != http.StatusCreated {
+		t.Fatalf("create Inbox %q = %d %s, want 201", name, created.Status, created.Body)
+	}
+	var inbox createdInbox
+	if err := json.Unmarshal([]byte(created.Body), &inbox); err != nil {
+		t.Fatalf("created Inbox %s: %v", created.Body, err)
+	}
+	return inbox
+}
+
+func (b *browser) Inboxes() []listedInbox {
+	b.i.t.Helper()
+	var inboxes inboxList
+	b.Get("/api/inboxes").JSON(b.i.t, &inboxes)
+	return inboxes.Inboxes
+}
+
+func (b *browser) MessagesIn(inboxID string) []message {
+	b.i.t.Helper()
+	return b.PageOf(inboxID, "").Messages
+}
+
+func (b *browser) InboxNamed(name string) listedInbox {
+	b.i.t.Helper()
+	for _, inbox := range b.Inboxes() {
+		if inbox.Name == name {
+			return inbox
+		}
+	}
+	b.i.t.Fatalf("no Inbox named %q", name)
+	return listedInbox{}
+}
+
+func names(inboxes []listedInbox) []string {
+	var listed []string
+	for _, inbox := range inboxes {
+		listed = append(listed, inbox.Name)
+	}
+	return listed
 }
 
 func (b *browser) Rendered() string {

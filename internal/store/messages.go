@@ -7,14 +7,28 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 )
 
-const pageSize = 50
+const (
+	pageSize        = 50
+	maxInboxName    = 100
+	zeroWidthJoiner = '‍'
+)
 
-var ErrPosition = errors.New("malformed position in the Message list")
+var (
+	ErrPosition     = errors.New("malformed position in the Message list")
+	ErrInboxName    = errors.New("an Inbox name needs 1 to 100 visible characters and no control character")
+	ErrInboxUnknown = errors.New("no such Inbox")
+)
 
 var unknownInboxPassword = rand.Text()
 
@@ -43,18 +57,76 @@ func newID() string {
 	return strings.ToLower(rand.Text())
 }
 
-func (s *Store) CreateInbox(ctx context.Context, name string, now time.Time) (Inbox, error) {
+func inboxName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	visible := strings.IndexFunc(name, func(r rune) bool {
+		return unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S)
+	}) >= 0
+	hidden := strings.IndexFunc(name, func(r rune) bool {
+		return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) && r != zeroWidthJoiner
+	}) >= 0
+	if !visible || hidden || utf8.RuneCountInString(name) > maxInboxName {
+		return "", ErrInboxName
+	}
+	return name, nil
+}
+
+func createInbox(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, name string, now time.Time) (Inbox, error) {
+	name, err := inboxName(name)
+	if err != nil {
+		return Inbox{}, err
+	}
 	inbox := Inbox{ID: newID(), Name: name, Username: newID()[:16], Password: rand.Text()}
-	_, err := s.db.ExecContext(ctx,
+	_, err = db.ExecContext(ctx,
 		"INSERT INTO inboxes (id, name, smtp_username, smtp_password, created_at) VALUES (?, ?, ?, ?, ?)",
 		inbox.ID, inbox.Name, inbox.Username, inbox.Password, now.UnixMilli())
 	return inbox, err
 }
 
+func (s *Store) CreateInbox(ctx context.Context, name string, now time.Time) (Inbox, error) {
+	return createInbox(ctx, s.db, name, now)
+}
+
+func (s *Store) CreateFirstInbox(ctx context.Context, name string, now time.Time) (Inbox, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Inbox{}, false, err
+	}
+	defer tx.Rollback()
+	var created bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM first_inbox)").Scan(&created); err != nil || created {
+		return Inbox{}, false, err
+	}
+	inbox, err := createInbox(ctx, tx, name, now)
+	if err != nil {
+		return Inbox{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO first_inbox (created_at) VALUES (?)", now.UnixMilli()); err != nil {
+		return Inbox{}, false, err
+	}
+	return inbox, true, tx.Commit()
+}
+
+func (s *Store) RenameInbox(ctx context.Context, id, name string) error {
+	name, err := inboxName(name)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, "UPDATE inboxes SET name = ? WHERE id = ?", name, id)
+	return whenNoRow(result, err, ErrInboxUnknown)
+}
+
+func (s *Store) DeleteInbox(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM inboxes WHERE id = ?", id)
+	return whenNoRow(result, err, ErrInboxUnknown)
+}
+
 func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, (SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)
-		FROM inboxes ORDER BY name COLLATE NOCASE, id`)
+		FROM inboxes ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +139,8 @@ func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
 		}
 		inboxes = append(inboxes, inbox)
 	}
+	byName := collate.New(language.Und, collate.IgnoreCase)
+	slices.SortStableFunc(inboxes, func(a, b Inbox) int { return byName.CompareString(a.Name, b.Name) })
 	return inboxes, rows.Err()
 }
 

@@ -48,6 +48,9 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	signedIn.HandleFunc("GET /api/session", a.showSession)
 	signedIn.HandleFunc("DELETE /api/session", a.signOut)
 	signedIn.HandleFunc("GET /api/inboxes", a.listInboxes)
+	signedIn.HandleFunc("POST /api/inboxes", a.createInbox)
+	signedIn.HandleFunc("PATCH /api/inboxes/{inbox}", a.renameInbox)
+	signedIn.HandleFunc("DELETE /api/inboxes/{inbox}", a.deleteInbox)
 	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages", a.listMessages)
 	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}", a.openMessage)
 	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.renderMessage)
@@ -122,8 +125,7 @@ func (a *api) signIn(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&submitted); err != nil {
-		writeError(w, http.StatusBadRequest, "malformed request")
+	if !decode(w, r, &submitted) {
 		return
 	}
 	now := a.now()
@@ -173,6 +175,68 @@ func (a *api) listInboxes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"inboxes": inboxes})
+}
+
+func decode(w http.ResponseWriter, r *http.Request, into any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(into); err != nil {
+		writeError(w, http.StatusBadRequest, "malformed request")
+		return false
+	}
+	return true
+}
+
+func readName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var submitted struct {
+		Name string `json:"name"`
+	}
+	ok := decode(w, r, &submitted)
+	return submitted.Name, ok
+}
+
+func (a *api) createInbox(w http.ResponseWriter, r *http.Request) {
+	name, ok := readName(w, r)
+	if !ok {
+		return
+	}
+	inbox, err := a.store.CreateInbox(r.Context(), name, a.now())
+	if a.refusedInboxChange(w, r, err) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, struct {
+		store.Inbox
+		SMTPUsername string `json:"smtpUsername"`
+		SMTPPassword string `json:"smtpPassword"`
+	}{inbox, inbox.Username, inbox.Password})
+}
+
+func (a *api) renameInbox(w http.ResponseWriter, r *http.Request) {
+	name, ok := readName(w, r)
+	if !ok {
+		return
+	}
+	if !a.refusedInboxChange(w, r, a.store.RenameInbox(r.Context(), r.PathValue("inbox"), name)) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
+	if !a.refusedInboxChange(w, r, a.store.DeleteInbox(r.Context(), r.PathValue("inbox"))) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (a *api) refusedInboxChange(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case errors.Is(err, store.ErrInboxName):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrInboxUnknown):
+		writeError(w, http.StatusNotFound, err.Error())
+	case err != nil:
+		a.fail(w, r, err)
+	default:
+		return false
+	}
+	return true
 }
 
 func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {

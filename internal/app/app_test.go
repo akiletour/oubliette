@@ -411,12 +411,14 @@ func TestSecretsAreNotStoredInClear(t *testing.T) {
 	}
 }
 
+type listedInbox struct {
+	ID           string
+	Name         string
+	MessageCount int
+}
+
 type inboxList struct {
-	Inboxes []struct {
-		ID           string
-		Name         string
-		MessageCount int
-	}
+	Inboxes []listedInbox
 }
 
 func TestFirstStartCreatesOneInboxAndLogsItsCredentials(t *testing.T) {

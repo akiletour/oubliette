@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { LogOut, Moon, Sun } from 'lucide-react'
+import { ChevronsUpDown, LogOut, Moon, Pencil, Sun, Trash2 } from 'lucide-react'
 import type { Session } from './App'
 import { dayLabel, relativeTime, t } from './i18n'
-import { fromTo, getJSON, inboxPath, messagePath, useMinuteTick, type Inbox, type Message } from './messages'
+import { DeleteInboxDialog, InboxNameDialog, InboxNav, SwitchInboxDialog } from './Inboxes'
+import { fromTo, getJSON, inboxPath, messagePath, request, useMinuteTick, type Inbox, type Message } from './messages'
 import { link, navigate, usePath } from './router'
 import { Stage } from './Stage'
 import { setTheme, useTheme } from './theme'
-import { Eyebrow, IconButton, Mark, cn, icon, pressable, textLink } from './ui'
+import { Eyebrow, IconButton, Mark, cn, icon, pressable, primaryButton, textLink } from './ui'
 
 const route = /^\/inboxes\/([^/]+)(?:\/messages\/([^/]+))?$/
 
@@ -32,9 +33,10 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
   const [, inboxId, messageId] = route.exec(path) ?? []
   const [inboxes, setInboxes] = useState<Inbox[]>()
   const [failed, setFailed] = useState(false)
+  const [dialog, setDialog] = useState<InboxDialog>()
   const wide = useMediaQuery('(min-width: 768px)')
 
-  useEffect(() => {
+  const loadInboxes = () =>
     getJSON<{ inboxes: Inbox[] }>('/api/inboxes', onSessionChange).then(
       (body) => {
         setInboxes(body.inboxes)
@@ -42,6 +44,9 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
       },
       () => setFailed(true),
     )
+
+  useEffect(() => {
+    loadInboxes()
   }, [inboxId])
 
   useEffect(() => {
@@ -53,37 +58,53 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
   const shown = useLastDefined(open ? messageId : undefined)
   const staged = wide ? (open ? messageId : undefined) : shown
   const signOut = () => fetch('/api/session', { method: 'DELETE' }).then(onSessionChange, onSessionChange)
+  const closeDialog = (kind: InboxDialog) => () => setDialog((current) => (current === kind ? undefined : current))
+
+  async function createInbox(name: string) {
+    const created: Inbox = await (await request('POST', '/api/inboxes', { name }, onSessionChange)).json()
+    await loadInboxes()
+    navigate(inboxPath(created.id))
+  }
+
+  async function renameInbox(id: string, name: string) {
+    await request('PATCH', `/api/inboxes/${id}`, { name }, onSessionChange)
+    await loadInboxes()
+  }
+
+  async function deleteInbox(id: string) {
+    await request('DELETE', `/api/inboxes/${id}`, undefined, onSessionChange)
+    setDialog(undefined)
+    setInboxes((listed) => listed?.filter((inbox) => inbox.id !== id))
+    navigate('/', 'replace')
+  }
 
   return (
     <div className="relative flex h-full overflow-hidden">
       <nav aria-label={t.inboxes} className="flex w-rail shrink-0 flex-col border-r border-line max-lg:hidden">
-        <div className="flex h-bar shrink-0 items-center pl-gutter font-semibold">{t.inboxes}</div>
-        <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
-          {inboxes?.map((inbox) => (
-            <li key={inbox.id}>
-              <a
-                {...link(inboxPath(inbox.id))}
-                aria-current={inbox.id === selected?.id ? 'page' : undefined}
-                className={cn(pressable, 'flex h-8 items-center gap-2 px-2 font-medium aria-[current=page]:bg-selected aria-[current=page]:text-fg')}
-              >
-                <span className="truncate">{inbox.name}</span>
-                <span className="ml-auto text-label font-normal text-fg-subtle tabular-nums">{inbox.messageCount}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
+        <InboxNav inboxes={inboxes ?? []} selectedId={selected?.id} onCreate={() => setDialog('create')} />
         <Account session={session} onSignOut={signOut} className="shrink-0 border-t border-line py-1.5 pr-2 pl-gutter" />
       </nav>
 
       <section aria-label={t.messages} inert={!wide && open} className="flex w-full min-w-0 flex-col md:w-list md:shrink-0">
         <div className="flex min-h-0 flex-1 flex-col">
-          {selected && <MessageList key={selected.id} inbox={selected} openId={messageId} onSessionEnd={onSessionChange} />}
+          {selected && <MessageList key={selected.id} inbox={selected} openId={messageId} onSessionEnd={onSessionChange} onAction={setDialog} />}
           {failed && !inboxes && (
             <p role="alert" className="p-gutter">
               {t.failed}
             </p>
           )}
-          {inboxes && !selected && path !== '/' && (
+          {inboxes?.length === 0 && (
+            <div className="flex flex-col items-start gap-3 p-gutter">
+              <div>
+                <p className="font-medium">{t.noInbox}</p>
+                <p className="mt-1 text-fg-muted">{t.noInboxHint}</p>
+              </div>
+              <button type="button" onClick={() => setDialog('create')} className={primaryButton}>
+                {t.newInbox}
+              </button>
+            </div>
+          )}
+          {inboxes && inboxes.length > 0 && !selected && path !== '/' && (
             <div className="flex flex-col items-start gap-2 p-gutter">
               <p className="font-medium">{t.inboxMissing}</p>
               {inboxes[0] && (
@@ -120,9 +141,28 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
           </div>
         )}
       </main>
+
+      {dialog === 'create' && <InboxNameDialog title={t.newInbox} action={t.create} onSubmit={createInbox} onClose={closeDialog('create')} />}
+      {dialog === 'rename' && selected && (
+        <InboxNameDialog
+          title={t.renameInbox}
+          action={t.rename}
+          initial={selected.name}
+          onSubmit={(name) => renameInbox(selected.id, name)}
+          onClose={closeDialog('rename')}
+        />
+      )}
+      {dialog === 'delete' && selected && (
+        <DeleteInboxDialog inbox={selected} onDelete={() => deleteInbox(selected.id)} onClose={closeDialog('delete')} />
+      )}
+      {dialog === 'switch' && inboxes && (
+        <SwitchInboxDialog inboxes={inboxes} selectedId={selected?.id} onCreate={() => setDialog('create')} onClose={closeDialog('switch')} />
+      )}
     </div>
   )
 }
+
+type InboxDialog = 'create' | 'rename' | 'delete' | 'switch'
 
 function Account({ session, onSignOut, className }: { session: Session; onSignOut: () => void; className?: string }) {
   return (
@@ -147,7 +187,17 @@ function ThemeToggle() {
   )
 }
 
-function MessageList({ inbox, openId, onSessionEnd }: { inbox: Inbox; openId?: string; onSessionEnd: () => void }) {
+function MessageList({
+  inbox,
+  openId,
+  onSessionEnd,
+  onAction,
+}: {
+  inbox: Inbox
+  openId?: string
+  onSessionEnd: () => void
+  onAction: (action: InboxDialog) => void
+}) {
   const [messages, setMessages] = useState<Message[]>([])
   const [next, setNext] = useState('')
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
@@ -178,8 +228,21 @@ function MessageList({ inbox, openId, onSessionEnd }: { inbox: Inbox; openId?: s
         <div className="flex items-center gap-2.5">
           <Mark />
           <h1 className="truncate text-heading font-semibold">{inbox.name}</h1>
+          <IconButton label={t.switchInbox} onClick={() => onAction('switch')} className="-ml-1 lg:hidden">
+            <ChevronsUpDown {...icon} />
+          </IconButton>
         </div>
-        <p className="mt-1 text-label text-fg-muted tabular-nums">{t.messageCount(inbox.messageCount)}</p>
+        <div className="mt-1 flex items-center">
+          <p className="text-label text-fg-muted tabular-nums">{t.messageCount(inbox.messageCount)}</p>
+          <div className="-my-1.5 ml-auto flex">
+            <IconButton label={t.renameInbox} onClick={() => onAction('rename')}>
+              <Pencil {...icon} />
+            </IconButton>
+            <IconButton label={t.deleteInbox} onClick={() => onAction('delete')}>
+              <Trash2 {...icon} />
+            </IconButton>
+          </div>
+        </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {status === 'failed' && (

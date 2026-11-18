@@ -1,15 +1,12 @@
 import { type FormEvent, useState } from 'react'
 import { CircleAlert } from 'lucide-react'
 import { t } from './i18n'
-import { Mark, icon } from './ui'
+import { Mark, field, icon, primaryButton } from './ui'
 
 const refusals: Partial<Record<number, string>> = {
   401: t.signInRefused,
   429: t.signInSlowedDown,
 }
-
-const field =
-  'h-11 rounded-md border border-line-strong bg-surface px-3 text-input font-normal text-fg transition-[border-color] duration-(--duration-fast) ease-out hover:border-fg-subtle md:h-10 md:text-body'
 
 export function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
   const [error, setError] = useState('')
@@ -63,11 +60,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => Promise<void> }) {
             </>
           )}
         </p>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="h-11 rounded-md bg-fg font-medium text-bg transition-[scale,background-color] duration-(--duration-fast) ease-out active:scale-[0.96] disabled:bg-fg-disabled md:h-10"
-        >
+        <button type="submit" disabled={submitting} className={primaryButton}>
           {submitting ? t.signingIn : t.signIn}
         </button>
       </form>

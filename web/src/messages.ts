@@ -19,11 +19,19 @@ export class RequestFailed extends Error {
   }
 }
 
-export async function getJSON<T>(path: string, onSessionEnd: () => void): Promise<T> {
-  const response = await fetch(path)
+export async function request(method: string, path: string, body: unknown, onSessionEnd: () => void) {
+  const response = await fetch(path, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
   if (response.status === 401) onSessionEnd()
   if (!response.ok) throw new RequestFailed(response.status)
-  return response.json()
+  return response
+}
+
+export async function getJSON<T>(path: string, onSessionEnd: () => void): Promise<T> {
+  return (await request('GET', path, undefined, onSessionEnd)).json()
 }
 
 const named = /^(.*) <([^<>]+)>$/

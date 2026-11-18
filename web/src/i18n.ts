@@ -29,6 +29,24 @@ const en = {
   noTextVersion: 'This message has no text version.',
   messageMissing: 'This message does not exist.',
   messageFailed: 'The message could not be loaded.',
+  newInbox: 'New inbox',
+  inboxName: 'Name',
+  create: 'Create',
+  cancel: 'Cancel',
+  renameInbox: 'Rename the inbox',
+  rename: 'Rename',
+  deleteInbox: 'Delete the inbox',
+  deleteInboxTitle: (name: string) => `Delete “${name}”?`,
+  deleteInboxWarning: (count: number) =>
+    `${count > 1 ? `Its ${count} messages will be deleted` : count === 1 ? 'Its message will be deleted' : 'It holds no message'}, and its SMTP credentials will stop working at once. This cannot be undone.`,
+  delete: 'Delete',
+  filterInboxes: 'Filter inboxes',
+  clearFilter: 'Clear the filter',
+  noInboxMatches: 'No inbox matches.',
+  noInbox: 'No inbox yet',
+  noInboxHint: 'Create an inbox for each application whose emails you want to capture.',
+  switchInbox: 'Switch inbox',
+  inboxNameRefused: 'Use 1 to 100 visible characters, without line breaks.',
 }
 
 const fr: typeof en = {
@@ -62,6 +80,24 @@ const fr: typeof en = {
   noTextVersion: 'Ce message n’a pas de version texte.',
   messageMissing: 'Ce message n’existe pas.',
   messageFailed: 'Le message n’a pas pu être chargé.',
+  newInbox: 'Nouvelle boîte',
+  inboxName: 'Nom',
+  create: 'Créer',
+  cancel: 'Annuler',
+  renameInbox: 'Renommer la boîte',
+  rename: 'Renommer',
+  deleteInbox: 'Supprimer la boîte',
+  deleteInboxTitle: (name: string) => `Supprimer « ${name} » ?`,
+  deleteInboxWarning: (count: number) =>
+    `${count > 1 ? `Ses ${count} messages seront supprimés` : count === 1 ? 'Son message sera supprimé' : 'Elle ne contient aucun message'}, et ses identifiants SMTP cesseront de fonctionner immédiatement. Cette action est définitive.`,
+  delete: 'Supprimer',
+  filterInboxes: 'Filtrer les boîtes',
+  clearFilter: 'Effacer le filtre',
+  noInboxMatches: 'Aucune boîte ne correspond.',
+  noInbox: 'Aucune boîte pour l’instant',
+  noInboxHint: 'Créez une boîte pour chaque application dont vous voulez capturer les e-mails.',
+  switchInbox: 'Changer de boîte',
+  inboxNameRefused: 'Utilisez de 1 à 100 caractères visibles, sans retour à la ligne.',
 }
 
 const catalogs = { en, fr }

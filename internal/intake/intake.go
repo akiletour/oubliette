@@ -45,10 +45,11 @@ func (b *backend) NewSession(*smtp.Conn) (smtp.Session, error) {
 }
 
 type session struct {
-	backend    *backend
-	inbox      *store.Inbox
-	sender     string
-	recipients []string
+	backend            *backend
+	inbox              *store.Inbox
+	username, password string
+	sender             string
+	recipients         []string
 }
 
 func (s *session) AuthMechanisms() []string {
@@ -74,9 +75,10 @@ func (s *session) authenticate(username, password string) error {
 		return errUnavailable
 	}
 	if !valid {
+		s.inbox = nil
 		return smtp.ErrAuthFailed
 	}
-	s.inbox = &inbox
+	s.inbox, s.username, s.password = &inbox, username, password
 	return nil
 }
 
@@ -101,6 +103,9 @@ func (s *session) Mail(from string, _ *smtp.MailOptions) error {
 	if s.inbox == nil {
 		return errAuthRequired
 	}
+	if err := s.authenticate(s.username, s.password); err != nil {
+		return err
+	}
 	s.sender, s.recipients = from, nil
 	return nil
 }
@@ -111,6 +116,9 @@ func (s *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 }
 
 func (s *session) Data(r io.Reader) error {
+	if err := s.authenticate(s.username, s.password); err != nil {
+		return err
+	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return err

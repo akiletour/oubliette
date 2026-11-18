@@ -85,12 +85,8 @@ func Start(cfg Config) (*Server, error) {
 }
 
 func createFirstInbox(storage *store.Store, cfg Config) error {
-	inboxes, err := storage.Inboxes(context.Background())
-	if err != nil || len(inboxes) > 0 {
-		return err
-	}
-	inbox, err := storage.CreateInbox(context.Background(), "Default", cfg.Now())
-	if err != nil {
+	inbox, created, err := storage.CreateFirstInbox(context.Background(), "Default", cfg.Now())
+	if err != nil || !created {
 		return err
 	}
 	cfg.Log.Info("created the first Inbox", "name", inbox.Name, "smtp_username", inbox.Username, "smtp_password", inbox.Password)
