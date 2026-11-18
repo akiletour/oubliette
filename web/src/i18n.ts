@@ -49,10 +49,23 @@ const en = {
   inboxNameRefused: 'Use 1 to 100 visible characters, without line breaks.',
   shareInbox: 'Share the inbox',
   shareTitle: (name: string) => `Share “${name}”`,
-  shareWarning: 'Anyone with this link can read every message of this inbox, without signing in.',
+  shareWarning: 'Anyone with one of these links can read every message of this inbox, without signing in.',
+  noShareLink: 'No link yet.',
+  newShareLink: 'New link',
+  expiry: 'Expires on (optional)',
+  createdOn: (date: string) => `Created ${date}`,
+  expiresOn: (date: string) => `Expires ${date}`,
+  expiredOn: (date: string) => `Expired ${date}`,
+  noExpiry: 'No expiry',
+  openedAgo: (when: string) => `Opened ${when}`,
+  neverOpened: 'Never opened',
+  copyLink: (label: string) => `Copy the link for ${label}`,
+  linkOf: (label: string) => `Link for ${label}`,
+  revoke: 'Revoke',
+  revokeLink: (label: string) => `Revoke the link for ${label}`,
+  revokeConfirm: 'It stops working at once, for good.',
   shareLabel: 'Who is it for?',
   shareLabelExample: 'Brand review team',
-  shareURL: (label: string) => `Link for ${label}`,
   createLink: 'Create the link',
   copy: 'Copy',
   copied: 'Copied',
@@ -114,10 +127,23 @@ const fr: typeof en = {
   inboxNameRefused: 'Utilisez de 1 à 100 caractères visibles, sans retour à la ligne.',
   shareInbox: 'Partager la boîte',
   shareTitle: (name: string) => `Partager « ${name} »`,
-  shareWarning: 'Toute personne qui a ce lien peut lire tous les messages de cette boîte, sans se connecter.',
+  shareWarning: 'Toute personne qui a l’un de ces liens peut lire tous les messages de cette boîte, sans se connecter.',
+  noShareLink: 'Aucun lien pour l’instant.',
+  newShareLink: 'Nouveau lien',
+  expiry: 'Expire le (facultatif)',
+  createdOn: (date: string) => `Créé le ${date}`,
+  expiresOn: (date: string) => `Expire le ${date}`,
+  expiredOn: (date: string) => `Expiré le ${date}`,
+  noExpiry: 'Sans expiration',
+  openedAgo: (when: string) => `Ouvert ${when}`,
+  neverOpened: 'Jamais ouvert',
+  copyLink: (label: string) => `Copier le lien pour ${label}`,
+  linkOf: (label: string) => `Lien pour ${label}`,
+  revoke: 'Révoquer',
+  revokeLink: (label: string) => `Révoquer le lien pour ${label}`,
+  revokeConfirm: 'Il cessera de fonctionner immédiatement et définitivement.',
   shareLabel: 'Pour qui ?',
   shareLabelExample: 'Équipe recette de la marque',
-  shareURL: (label: string) => `Lien pour ${label}`,
   createLink: 'Créer le lien',
   copy: 'Copier',
   copied: 'Copié',
@@ -165,6 +191,10 @@ export function relativeTime(date: Date) {
   if (days < 7) return elapsed.format(-days, 'day')
   return dayAndMonth.format(date)
 }
+
+const dateFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', year: 'numeric' })
+
+export const shortDate = (date: Date) => dateFormat.format(date)
 
 export function dayLabel(date: Date) {
   const days = calendarDaysAgo(date)

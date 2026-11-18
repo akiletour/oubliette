@@ -52,6 +52,8 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}", a.member(a.openMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
 	mux.Handle("POST /api/inboxes/{inbox}/share-links", a.member(a.createShareLink))
+	mux.Handle("GET /api/inboxes/{inbox}/share-links", a.member(a.listShareLinks))
+	mux.Handle("DELETE /api/inboxes/{inbox}/share-links/{link}", a.member(a.revokeShareLink))
 
 	mux.Handle("GET /api/share/{token}", a.visitor(a.showSharedInbox))
 	mux.Handle("GET /api/share/{token}/messages", a.visitor(a.listMessages))
@@ -207,14 +209,33 @@ func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) createShareLink(w http.ResponseWriter, r *http.Request) {
 	var submitted struct {
-		Label string `json:"label"`
+		Label     string     `json:"label"`
+		ExpiresAt *time.Time `json:"expiresAt"`
 	}
 	if !decode(w, r, &submitted) {
 		return
 	}
-	link, err := a.store.CreateShareLink(r.Context(), r.PathValue("inbox"), submitted.Label, a.now())
+	link, err := a.store.CreateShareLink(r.Context(), r.PathValue("inbox"), submitted.Label, submitted.ExpiresAt, a.now())
 	if !a.refused(w, r, err) {
 		writeJSON(w, http.StatusCreated, link)
+	}
+}
+
+func (a *api) listShareLinks(w http.ResponseWriter, r *http.Request) {
+	inbox, found := a.inboxInScope(w, r)
+	if !found {
+		return
+	}
+	links, err := a.store.ShareLinks(r.Context(), inbox.ID, a.now())
+	if !a.refused(w, r, err) {
+		writeJSON(w, http.StatusOK, map[string]any{"shareLinks": links})
+	}
+}
+
+func (a *api) revokeShareLink(w http.ResponseWriter, r *http.Request) {
+	err := a.store.RevokeShareLink(r.Context(), r.PathValue("inbox"), r.PathValue("link"), a.now())
+	if !a.refused(w, r, err) {
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -228,9 +249,9 @@ func (a *api) showSharedInbox(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) refused(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
-	case errors.Is(err, store.ErrInboxName), errors.Is(err, store.ErrShareLinkLabel):
+	case errors.Is(err, store.ErrInboxName), errors.Is(err, store.ErrShareLinkLabel), errors.Is(err, store.ErrShareLinkExpiry):
 		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, store.ErrInboxUnknown):
+	case errors.Is(err, store.ErrInboxUnknown), errors.Is(err, store.ErrShareLinkUnknown):
 		writeError(w, http.StatusNotFound, err.Error())
 	case err != nil:
 		a.fail(w, r, err)

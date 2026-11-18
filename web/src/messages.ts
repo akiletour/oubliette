@@ -6,7 +6,7 @@ export type Message = { id: string; receivedAt: string; subject: string; preview
 
 export type OpenedMessage = Message & { text: string; hasHTML: boolean }
 
-export type ShareLink = { id: string; label: string; token: string; createdAt: string }
+export type ShareLink = { id: string; label: string; token: string; createdAt: string; expiresAt: string | null; lastOpenedAt: string | null; expired: boolean }
 
 export const inboxPath = (inboxId: string) => `/inboxes/${inboxId}`
 

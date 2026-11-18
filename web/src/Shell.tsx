@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { ChevronsUpDown, Link2, LogOut, Pencil, Trash2 } from 'lucide-react'
 import type { Session } from './App'
 import { t } from './i18n'
-import { DeleteInboxDialog, InboxNameDialog, InboxNav, ShareInboxDialog, SwitchInboxDialog } from './Inboxes'
+import { DeleteInboxDialog, InboxNameDialog, InboxNav, SwitchInboxDialog } from './Inboxes'
 import { getJSON, inboxPath, request, type Inbox, type ShareLink } from './messages'
 import { link, navigate, usePath } from './router'
+import { SharingDialog } from './Sharing'
 import { IconButton, ThemeToggle, cn, icon, primaryButton, textLink } from './ui'
 import { MessageList, Workspace, type Place } from './Workspace'
 
@@ -67,9 +68,11 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
     navigate('/', 'replace')
   }
 
-  async function shareInbox(id: string, label: string): Promise<ShareLink> {
-    return (await request('POST', `/api/inboxes/${id}/share-links`, { label }, onSessionChange)).json()
-  }
+  const sharingOf = (id: string) => ({
+    list: async () => (await getJSON<{ shareLinks: ShareLink[] }>(`/api/inboxes/${id}/share-links`, onSessionChange)).shareLinks,
+    create: (label: string, expiresAt?: string) => request('POST', `/api/inboxes/${id}/share-links`, { label, expiresAt }, onSessionChange),
+    revoke: (link: string) => request('DELETE', `/api/inboxes/${id}/share-links/${link}`, undefined, onSessionChange),
+  })
 
   return (
     <div className="relative flex h-full overflow-hidden">
@@ -158,7 +161,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
         <DeleteInboxDialog inbox={selected} onDelete={() => deleteInbox(selected.id)} onClose={closeDialog('delete')} />
       )}
       {dialog === 'share' && selected && (
-        <ShareInboxDialog inbox={selected} onShare={(label) => shareInbox(selected.id, label)} onClose={closeDialog('share')} />
+        <SharingDialog inbox={selected} sharing={sharingOf(selected.id)} onClose={closeDialog('share')} />
       )}
       {dialog === 'switch' && inboxes && (
         <SwitchInboxDialog inboxes={inboxes} selectedId={selected?.id} onCreate={() => setDialog('create')} onClose={closeDialog('switch')} />

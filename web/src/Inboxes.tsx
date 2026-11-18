@@ -1,9 +1,9 @@
-import { useState, type FormEvent, type MouseEvent } from 'react'
-import { Check, CircleAlert, Copy, Plus } from 'lucide-react'
+import { useState, type MouseEvent } from 'react'
+import { Plus } from 'lucide-react'
 import { t } from './i18n'
-import { RequestFailed, inboxPath, type Inbox, type ShareLink } from './messages'
+import { inboxPath, type Inbox } from './messages'
 import { link } from './router'
-import { Dialog, FilterField, IconButton, borderedButton, cn, field, icon, pressable, primaryButton, secondaryButton } from './ui'
+import { Dialog, FilterField, IconButton, Refusal, cn, field, icon, pressable, primaryButton, secondaryButton, useSubmission } from './ui'
 
 const folded = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 
@@ -78,35 +78,6 @@ export function SwitchInboxDialog(props: { inboxes: Inbox[]; selectedId?: string
   )
 }
 
-function Refusal({ state }: { state: Submission }) {
-  if (state !== 'failed' && state !== 'refused') return null
-  return (
-    <p role="alert" className="flex items-start gap-2">
-      <CircleAlert {...icon} className="mt-0.5 shrink-0" />
-      {state === 'refused' ? t.inboxNameRefused : t.failed}
-    </p>
-  )
-}
-
-type Submission = 'idle' | 'busy' | 'failed' | 'refused'
-
-function useSubmission<T>(action: () => Promise<T>, done: (result: T) => void) {
-  const [state, setState] = useState<Submission>('idle')
-  return [
-    state,
-    async (event: FormEvent) => {
-      event.preventDefault()
-      setState('busy')
-      try {
-        done(await action())
-        setState('idle')
-      } catch (error) {
-        setState(error instanceof RequestFailed && error.status === 400 ? 'refused' : 'failed')
-      }
-    },
-  ] as const
-}
-
 export function InboxNameDialog(props: {
   title: string
   action: string
@@ -174,75 +145,6 @@ function DeleteInboxForm({ title, count, onDelete, close }: { title: string; cou
         <button type="submit" disabled={state === 'busy'} className={primaryButton}>
           {t.delete}
         </button>
-      </div>
-    </form>
-  )
-}
-
-export function ShareInboxDialog({ inbox, onShare, onClose }: { inbox: Inbox; onShare: (label: string) => Promise<ShareLink>; onClose: () => void }) {
-  const title = t.shareTitle(inbox.name)
-  return (
-    <Dialog title={title} onClose={onClose}>
-      {(close) => <ShareForm title={title} onShare={onShare} close={close} />}
-    </Dialog>
-  )
-}
-
-function ShareForm({ title, onShare, close }: { title: string; onShare: (label: string) => Promise<ShareLink>; close: () => void }) {
-  const [label, setLabel] = useState('')
-  const [url, setURL] = useState('')
-  const [copied, setCopied] = useState(false)
-  const [state, submit] = useSubmission(
-    () => onShare(label),
-    (link) => setURL(`${window.location.origin}/s/${link.token}`),
-  )
-  const copy = () => navigator.clipboard?.writeText(url).then(() => setCopied(true))
-
-  return (
-    <form onSubmit={url ? (event) => event.preventDefault() : submit} className="flex flex-col gap-4 p-5">
-      <h2 className="text-heading font-semibold text-balance">{title}</h2>
-      <p className="text-fg-muted">{t.shareWarning}</p>
-      {url ? (
-        <label className="flex flex-col gap-1.5 text-label font-medium text-fg-muted">
-          {t.shareURL(label.trim())}
-          <span className="flex gap-2">
-            <input value={url} readOnly onFocus={(event) => event.currentTarget.select()} className={cn(field, 'min-w-0 flex-1 font-mono')} />
-            <button type="button" onClick={copy} className={cn(borderedButton, 'flex items-center gap-2')}>
-              {copied ? <Check {...icon} /> : <Copy {...icon} />}
-              {copied ? t.copied : t.copy}
-            </button>
-          </span>
-        </label>
-      ) : (
-        <label className="flex flex-col gap-1.5 text-label font-medium text-fg-muted">
-          {t.shareLabel}
-          <input
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder={t.shareLabelExample}
-            required
-            spellCheck={false}
-            autoComplete="off"
-            className={field}
-          />
-        </label>
-      )}
-      <Refusal state={state} />
-      <div className="flex justify-end gap-2">
-        {url ? (
-          <button type="button" onClick={close} className={primaryButton}>
-            {t.done}
-          </button>
-        ) : (
-          <>
-            <button type="button" onClick={close} className={secondaryButton}>
-              {t.cancel}
-            </button>
-            <button type="submit" disabled={state === 'busy' || !label.trim()} className={primaryButton}>
-              {t.createLink}
-            </button>
-          </>
-        )}
       </div>
     </form>
   )

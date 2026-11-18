@@ -55,7 +55,7 @@ func (a *api) member(next http.HandlerFunc) http.Handler {
 func (a *api) visitor(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		unlisted(w)
-		inbox, found, err := a.store.SharedInbox(r.Context(), r.PathValue("token"))
+		inbox, found, err := a.store.OpenShareLink(r.Context(), r.PathValue("token"), a.now())
 		if err != nil {
 			a.fail(w, r, err)
 			return

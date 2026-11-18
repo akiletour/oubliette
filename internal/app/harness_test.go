@@ -274,9 +274,13 @@ func (b *browser) MessagesIn(inboxID string) []message {
 }
 
 type shareLink struct {
-	ID    string
-	Label string
-	Token string
+	ID           string
+	Label        string
+	Token        string
+	CreatedAt    time.Time
+	ExpiresAt    *time.Time
+	LastOpenedAt *time.Time
+	Expired      bool
 }
 
 func labelled(label string) string {
@@ -284,10 +288,42 @@ func labelled(label string) string {
 	return string(body)
 }
 
+func expiring(label string, at time.Time) string {
+	body, _ := json.Marshal(map[string]any{"label": label, "expiresAt": at})
+	return string(body)
+}
+
 func (b *browser) Share(inboxID, label string) shareLink {
+	b.i.t.Helper()
+	return b.ShareWith(inboxID, labelled(label))
+}
+
+func expiredLabels(links []shareLink) []string {
+	var expired []string
+	for _, link := range links {
+		if link.Expired {
+			expired = append(expired, link.Label)
+		}
+	}
+	return expired
+}
+
+func (b *browser) Opens(link shareLink) bool {
+	b.i.t.Helper()
+	return b.Get("/api/share/"+link.Token).Status == http.StatusOK
+}
+
+func (b *browser) ShareLinks(inboxID string) []shareLink {
+	b.i.t.Helper()
+	var listed struct{ ShareLinks []shareLink }
+	b.Get("/api/inboxes/"+inboxID+"/share-links").JSON(b.i.t, &listed)
+	return listed.ShareLinks
+}
+
+func (b *browser) ShareWith(inboxID, body string) shareLink {
 	t := b.i.t
 	t.Helper()
-	created := b.Do(http.MethodPost, "/api/inboxes/"+inboxID+"/share-links", labelled(label))
+	created := b.Do(http.MethodPost, "/api/inboxes/"+inboxID+"/share-links", body)
 	if created.Status != http.StatusCreated {
 		t.Fatalf("share Inbox %s = %d %s, want 201", inboxID, created.Status, created.Body)
 	}

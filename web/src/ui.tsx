@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { Moon, Search, Sun, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { CircleAlert, Moon, Search, Sun, X } from 'lucide-react'
 import { t } from './i18n'
+import { RequestFailed } from './messages'
 import { setTheme, useTheme } from './theme'
 
 export const cn = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ')
@@ -61,7 +62,17 @@ export function IconButton({
   )
 }
 
-export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: (close: () => void) => ReactNode }) {
+export function Dialog({
+  title,
+  wide,
+  onClose,
+  children,
+}: {
+  title: string
+  wide?: boolean
+  onClose: () => void
+  children: (close: () => void) => ReactNode
+}) {
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => dialog.current?.showModal(), [])
   return (
@@ -70,7 +81,10 @@ export function Dialog({ title, onClose, children }: { title: string; onClose: (
       aria-label={title}
       onClose={onClose}
       onClick={(event) => event.target === event.currentTarget && event.currentTarget.close()}
-      className="mx-gutter my-auto max-w-none rounded-xl border border-line bg-surface-raised text-fg shadow-sheet transition-[opacity,translate] duration-(--duration-slow) ease-out backdrop:bg-scrim starting:translate-y-2 starting:opacity-0 md:mx-auto md:w-96"
+      className={cn(
+        'mx-gutter my-auto max-w-none rounded-xl border border-line bg-surface-raised text-fg shadow-sheet transition-[opacity,translate] duration-(--duration-slow) ease-out backdrop:bg-scrim starting:translate-y-2 starting:opacity-0 md:mx-auto',
+        wide ? 'md:w-xl' : 'md:w-96',
+      )}
     >
       {children(() => dialog.current?.close())}
     </dialog>
@@ -117,4 +131,33 @@ export function ThemeToggle() {
       {theme === 'dark' ? <Sun {...icon} /> : <Moon {...icon} />}
     </IconButton>
   )
+}
+
+export function Refusal({ state }: { state: Submission }) {
+  if (state !== 'failed' && state !== 'refused') return null
+  return (
+    <p role="alert" className="flex items-start gap-2">
+      <CircleAlert {...icon} className="mt-0.5 shrink-0" />
+      {state === 'refused' ? t.inboxNameRefused : t.failed}
+    </p>
+  )
+}
+
+type Submission = 'idle' | 'busy' | 'failed' | 'refused'
+
+export function useSubmission<T>(action: () => Promise<T>, done: (result: T) => void) {
+  const [state, setState] = useState<Submission>('idle')
+  return [
+    state,
+    async (event: FormEvent) => {
+      event.preventDefault()
+      setState('busy')
+      try {
+        done(await action())
+        setState('idle')
+      } catch (error) {
+        setState(error instanceof RequestFailed && error.status === 400 ? 'refused' : 'failed')
+      }
+    },
+  ] as const
 }
