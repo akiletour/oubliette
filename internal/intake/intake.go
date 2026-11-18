@@ -2,6 +2,7 @@ package intake
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"strings"
@@ -30,10 +31,11 @@ type backend struct {
 	log   *slog.Logger
 }
 
-func NewServer(storage *store.Store, hub *live.Hub, now func() time.Time, log *slog.Logger) *smtp.Server {
+func NewServer(storage *store.Store, hub *live.Hub, encryption *tls.Config, insecureAuth bool, now func() time.Time, log *slog.Logger) *smtp.Server {
 	server := smtp.NewServer(&backend{store: storage, hub: hub, now: now, log: log})
 	server.Domain = "oubliette"
-	server.AllowInsecureAuth = true
+	server.TLSConfig = encryption
+	server.AllowInsecureAuth = insecureAuth
 	server.EnableSMTPUTF8 = true
 	server.MaxLineLength = maxLineLength
 	server.ReadTimeout = time.Minute

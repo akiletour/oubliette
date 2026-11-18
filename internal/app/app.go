@@ -28,6 +28,8 @@ type Config struct {
 	HTTPAddr           string
 	SMTPAddr           string
 	InsecureAuth       bool
+	SMTPCertFile       string
+	SMTPKeyFile        string
 	SMTPAdvertisedHost string
 	SMTPAdvertisedPort string
 	Now                func() time.Time
@@ -43,9 +45,9 @@ type Server struct {
 }
 
 func Start(cfg Config) (*Server, error) {
-	if !cfg.InsecureAuth {
-		return nil, errors.New("SMTP encryption is not available yet, so Credentials would travel unencrypted: " +
-			"start with --smtp-insecure-auth (OUBLIETTE_SMTP_INSECURE_AUTH=true) to accept that on a private network")
+	encryption, err := smtpEncryption(cfg)
+	if err != nil {
+		return nil, err
 	}
 	advertised, err := advertisedSMTP(cfg)
 	if err != nil {
@@ -82,7 +84,7 @@ func Start(cfg Config) (*Server, error) {
 			BaseContext:       func(net.Listener) context.Context { return streaming },
 		},
 		httpAddr: httpListener.Addr().String(),
-		smtp:     intake.NewServer(storage, hub, cfg.Now, cfg.Log),
+		smtp:     intake.NewServer(storage, hub, encryption, cfg.InsecureAuth, cfg.Now, cfg.Log),
 		smtpAddr: smtpListener.Addr().String(),
 	}
 	server.http.RegisterOnShutdown(endStreams)

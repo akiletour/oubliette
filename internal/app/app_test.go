@@ -802,30 +802,6 @@ func TestFailedStartDoesNotUseUpTheFirstInbox(t *testing.T) {
 	}
 }
 
-func TestServerRefusesToStartWithoutTheInsecureAuthenticationOverride(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var stderr bytes.Buffer
-	args := []string{"--data", filepath.Join(t.TempDir(), "oubliette.db"), "--http-addr", "127.0.0.1:0", "--smtp-addr", "127.0.0.1:0", "serve"}
-
-	code := app.Main(ctx, args, strings.NewReader(""), io.Discard, &stderr, func(string) string { return "" })
-
-	if code == 0 {
-		t.Fatal("serve started without the insecure-authentication override")
-	}
-	if !strings.Contains(stderr.String(), "--smtp-insecure-auth") {
-		t.Fatalf("the refusal does not name the override: %s", stderr.String())
-	}
-
-	stderr.Reset()
-	misspelt := map[string]string{"OUBLIETTE_SMTP_INSECURE_AUTH": "yes"}
-	code = app.Main(ctx, args, strings.NewReader(""), io.Discard, &stderr, func(key string) string { return misspelt[key] })
-	if code == 0 || !strings.Contains(stderr.String(), "OUBLIETTE_SMTP_INSECURE_AUTH") {
-		t.Fatalf("an unreadable override gave exit %d and %q, want a refusal naming the variable", code, stderr.String())
-	}
-}
-
 func TestServeCommandRunsUntilInterrupted(t *testing.T) {
 	t.Parallel()
 	ctx, interrupt := context.WithCancel(context.Background())

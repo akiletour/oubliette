@@ -49,6 +49,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	insecureAuthFromEnv, _ := strconv.ParseBool(getenv("OUBLIETTE_SMTP_INSECURE_AUTH"))
 	insecureAuth := flags.Bool("smtp-insecure-auth", insecureAuthFromEnv,
 		"accept SMTP authentication without encryption (OUBLIETTE_SMTP_INSECURE_AUTH)")
+	tlsCert := flags.String("smtp-tls-cert", getenv("OUBLIETTE_SMTP_TLS_CERT"),
+		"PEM certificate file the SMTP server offers through STARTTLS (OUBLIETTE_SMTP_TLS_CERT)")
+	tlsKey := flags.String("smtp-tls-key", getenv("OUBLIETTE_SMTP_TLS_KEY"),
+		"PEM private key file of that certificate (OUBLIETTE_SMTP_TLS_KEY)")
 	advertisedHost := flags.String("smtp-advertised-host", getenv("OUBLIETTE_SMTP_ADVERTISED_HOST"),
 		"SMTP host shown to Members, the host of the page when empty (OUBLIETTE_SMTP_ADVERTISED_HOST)")
 	advertisedPort := flags.String("smtp-advertised-port", getenv("OUBLIETTE_SMTP_ADVERTISED_PORT"),
@@ -66,6 +70,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			HTTPAddr:           *httpAddr,
 			SMTPAddr:           *smtpAddr,
 			InsecureAuth:       *insecureAuth,
+			SMTPCertFile:       *tlsCert,
+			SMTPKeyFile:        *tlsKey,
 			SMTPAdvertisedHost: *advertisedHost,
 			SMTPAdvertisedPort: *advertisedPort,
 			Now:                time.Now,
