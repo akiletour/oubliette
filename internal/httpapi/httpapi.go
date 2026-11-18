@@ -54,8 +54,10 @@ func New(storage *store.Store, hub *live.Hub, ui fs.FS, now func() time.Time, lo
 	mux.Handle("PATCH /api/inboxes/{inbox}", a.member(a.renameInbox))
 	mux.Handle("DELETE /api/inboxes/{inbox}", a.member(a.deleteInbox))
 	mux.Handle("GET /api/inboxes/{inbox}/messages", a.member(a.listMessages))
+	mux.Handle("DELETE /api/inboxes/{inbox}/messages", a.member(a.emptyInbox))
 	mux.Handle("GET /api/inboxes/{inbox}/events", a.member(a.streamEvents))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}", a.member(a.openMessage))
+	mux.Handle("DELETE /api/inboxes/{inbox}/messages/{message}", a.member(a.deleteMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/raw", a.member(a.showRaw))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/attachments/{attachment}", a.member(a.downloadAttachment))
@@ -219,6 +221,28 @@ func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *api) deleteMessage(w http.ResponseWriter, r *http.Request) {
+	inbox, found := a.inboxInScope(w, r)
+	if !found {
+		return
+	}
+	if !a.refused(w, r, a.store.DeleteMessage(r.Context(), inbox.ID, r.PathValue("message"))) {
+		a.hub.Removed(inbox.ID, r.PathValue("message"))
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (a *api) emptyInbox(w http.ResponseWriter, r *http.Request) {
+	inbox, found := a.inboxInScope(w, r)
+	if !found {
+		return
+	}
+	if !a.refused(w, r, a.store.EmptyInbox(r.Context(), inbox.ID)) {
+		a.hub.Emptied(inbox.ID)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func (a *api) createShareLink(w http.ResponseWriter, r *http.Request) {
 	var submitted struct {
 		Label     string     `json:"label"`
@@ -264,7 +288,7 @@ func (a *api) refused(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
 	case errors.Is(err, store.ErrInboxName), errors.Is(err, store.ErrShareLinkLabel), errors.Is(err, store.ErrShareLinkExpiry):
 		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, store.ErrInboxUnknown), errors.Is(err, store.ErrShareLinkUnknown):
+	case errors.Is(err, store.ErrInboxUnknown), errors.Is(err, store.ErrMessageUnknown), errors.Is(err, store.ErrShareLinkUnknown):
 		writeError(w, http.StatusNotFound, err.Error())
 	case err != nil:
 		a.fail(w, r, err)
@@ -296,7 +320,7 @@ func (a *api) streamEvents(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		return
 	}
-	received, stop := a.hub.Listen(inbox.ID)
+	events, stop := a.hub.Listen(inbox.ID)
 	defer stop()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
@@ -314,11 +338,8 @@ func (a *api) streamEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case messageID := <-received:
-			frame = ""
-			if messageID != "" {
-				frame = "event: received\ndata: {\"id\":" + strconv.Quote(messageID) + "}\n\n"
-			}
+		case event := <-events:
+			frame = eventFrame(event)
 		case <-beat.C:
 			frame = ": heartbeat\n\n"
 		}
@@ -329,6 +350,17 @@ func (a *api) streamEvents(w http.ResponseWriter, r *http.Request) {
 		if !inScope {
 			return
 		}
+	}
+}
+
+func eventFrame(event live.Event) string {
+	switch {
+	case event.Name == "":
+		return ""
+	case event.MessageID == "":
+		return "event: " + event.Name + "\ndata: {}\n\n"
+	default:
+		return "event: " + event.Name + "\ndata: {\"id\":" + strconv.Quote(event.MessageID) + "}\n\n"
 	}
 }
 

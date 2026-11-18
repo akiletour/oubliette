@@ -1,3 +1,9 @@
+const enMessagesGone = (count: number) =>
+  count > 1 ? `Its ${count} messages will be deleted` : count === 1 ? 'Its message will be deleted' : 'It holds no message'
+
+const frMessagesGone = (count: number) =>
+  count > 1 ? `Ses ${count} messages seront supprimés` : count === 1 ? 'Son message sera supprimé' : 'Elle ne contient aucun message'
+
 const en = {
   signInTitle: 'Sign in to Oubliette',
   email: 'Email',
@@ -64,9 +70,13 @@ const en = {
   rename: 'Rename',
   deleteInbox: 'Delete the inbox',
   deleteInboxTitle: (name: string) => `Delete “${name}”?`,
-  deleteInboxWarning: (count: number) =>
-    `${count > 1 ? `Its ${count} messages will be deleted` : count === 1 ? 'Its message will be deleted' : 'It holds no message'}, and its SMTP credentials will stop working at once. This cannot be undone.`,
+  deleteInboxWarning: (count: number) => `${enMessagesGone(count)}, and its SMTP credentials will stop working at once. This cannot be undone.`,
   delete: 'Delete',
+  deleteMessage: 'Delete the message',
+  emptyTheInbox: 'Empty the inbox',
+  emptyInboxTitle: (name: string) => `Empty “${name}”?`,
+  emptyInboxWarning: (count: number) => `${enMessagesGone(count)}. The inbox, its SMTP credentials and its share links stay. This cannot be undone.`,
+  empty: 'Empty',
   filterInboxes: 'Filter inboxes',
   clearFilter: 'Clear the filter',
   noInboxMatches: 'No inbox matches.',
@@ -169,9 +179,13 @@ const fr: typeof en = {
   rename: 'Renommer',
   deleteInbox: 'Supprimer la boîte',
   deleteInboxTitle: (name: string) => `Supprimer « ${name} » ?`,
-  deleteInboxWarning: (count: number) =>
-    `${count > 1 ? `Ses ${count} messages seront supprimés` : count === 1 ? 'Son message sera supprimé' : 'Elle ne contient aucun message'}, et ses identifiants SMTP cesseront de fonctionner immédiatement. Cette action est définitive.`,
+  deleteInboxWarning: (count: number) => `${frMessagesGone(count)}, et ses identifiants SMTP cesseront de fonctionner immédiatement. Cette action est définitive.`,
   delete: 'Supprimer',
+  deleteMessage: 'Supprimer le message',
+  emptyTheInbox: 'Vider la boîte',
+  emptyInboxTitle: (name: string) => `Vider « ${name} » ?`,
+  emptyInboxWarning: (count: number) => `${frMessagesGone(count)}. La boîte, ses identifiants SMTP et ses liens de partage restent. Cette action est définitive.`,
+  empty: 'Vider',
   filterInboxes: 'Filtrer les boîtes',
   clearFilter: 'Effacer le filtre',
   noInboxMatches: 'Aucune boîte ne correspond.',

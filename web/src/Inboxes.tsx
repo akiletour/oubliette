@@ -122,30 +122,55 @@ function InboxNameForm({ title, action, initial = '', onSubmit, close }: Paramet
   )
 }
 
-export function DeleteInboxDialog({ inbox, onDelete, onClose }: { inbox: Inbox; onDelete: () => Promise<unknown>; onClose: () => void }) {
-  const title = t.deleteInboxTitle(inbox.name)
+type Confirmation = { title: string; warning: string; action: string; onConfirm: () => Promise<unknown> }
+
+function ConfirmDialog({ onClose, ...confirmation }: Confirmation & { onClose: () => void }) {
   return (
-    <Dialog title={title} onClose={onClose}>
-      {(close) => <DeleteInboxForm title={title} count={inbox.messageCount} onDelete={onDelete} close={close} />}
+    <Dialog title={confirmation.title} onClose={onClose}>
+      {(close) => <ConfirmForm {...confirmation} close={close} />}
     </Dialog>
   )
 }
 
-function DeleteInboxForm({ title, count, onDelete, close }: { title: string; count: number; onDelete: () => Promise<unknown>; close: () => void }) {
-  const [state, submit] = useSubmission(onDelete, close)
+function ConfirmForm({ title, warning, action, onConfirm, close }: Confirmation & { close: () => void }) {
+  const [state, submit] = useSubmission(onConfirm, close)
   return (
     <form onSubmit={submit} className="flex flex-col gap-4 p-5">
       <h2 className="text-heading font-semibold text-balance">{title}</h2>
-      <p className="text-fg-muted">{t.deleteInboxWarning(count)}</p>
+      <p className="text-fg-muted">{warning}</p>
       <Refusal state={state} />
       <div className="flex justify-end gap-2">
         <button type="button" onClick={close} className={secondaryButton}>
           {t.cancel}
         </button>
         <button type="submit" disabled={state === 'busy'} className={primaryButton}>
-          {t.delete}
+          {action}
         </button>
       </div>
     </form>
+  )
+}
+
+export function DeleteInboxDialog({ inbox, onDelete, onClose }: { inbox: Inbox; onDelete: () => Promise<unknown>; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title={t.deleteInboxTitle(inbox.name)}
+      warning={t.deleteInboxWarning(inbox.messageCount)}
+      action={t.delete}
+      onConfirm={onDelete}
+      onClose={onClose}
+    />
+  )
+}
+
+export function EmptyInboxDialog({ inbox, onEmpty, onClose }: { inbox: Inbox; onEmpty: () => Promise<unknown>; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title={t.emptyInboxTitle(inbox.name)}
+      warning={t.emptyInboxWarning(inbox.messageCount)}
+      action={t.empty}
+      onConfirm={onEmpty}
+      onClose={onClose}
+    />
   )
 }

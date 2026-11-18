@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { dayLabel, relativeTime, t } from './i18n'
 import { fromTo, getJSON, messageAt, useMinuteTick, type Message } from './messages'
-import { link } from './router'
+import { link, navigate } from './router'
 import { Stage, type Width } from './Stage'
 import { Eyebrow, FilterField, Mark, cn, pressable, textLink } from './ui'
 
@@ -28,6 +28,7 @@ export function Workspace({
   place,
   messageId,
   onSessionEnd,
+  onDeleteMessage,
   inspectorWhenRoomy,
   footer,
   children,
@@ -35,6 +36,7 @@ export function Workspace({
   place?: Place
   messageId?: string
   onSessionEnd: () => void
+  onDeleteMessage?: (messageId: string) => Promise<unknown>
   inspectorWhenRoomy?: boolean
   footer: ReactNode
   children: ReactNode
@@ -70,6 +72,7 @@ export function Workspace({
             place={place}
             messageId={staged}
             onSessionEnd={onSessionEnd}
+            onDelete={onDeleteMessage && (() => onDeleteMessage(staged))}
             preview={{ width, onWidth: setChosenWidth, inspector, onInspector: setInspectorChoice }}
           />
         ) : (
@@ -97,7 +100,11 @@ function useDebounced<T>(value: T, delay: number) {
   return settled
 }
 
-function useLiveInbox(api: string, onChange: (received?: string) => void) {
+const liveEvents = ['received', 'removed', 'emptied'] as const
+
+type LiveEvent = { name: (typeof liveEvents)[number]; id?: string }
+
+function useLiveInbox(api: string, onChange: (event?: LiveEvent) => void) {
   const [live, setLive] = useState(true)
   const [attempt, setAttempt] = useState(0)
   const latestOnChange = useRef(onChange)
@@ -113,7 +120,9 @@ function useLiveInbox(api: string, onChange: (received?: string) => void) {
       if (reopened) latestOnChange.current()
       reopened = true
     }
-    source.addEventListener('received', (event) => latestOnChange.current(JSON.parse(event.data).id))
+    for (const name of liveEvents) {
+      source.addEventListener(name, (event) => latestOnChange.current({ name, id: JSON.parse(event.data).id }))
+    }
     source.onerror = () => {
       setLive(false)
       if (source.readyState !== EventSource.CLOSED) return
@@ -174,11 +183,16 @@ export function MessageList({
     }
   }
 
-  const live = useLiveInbox(place.api, (received) => {
-    if (received) {
-      setFresh((ids) => new Set(ids).add(received))
-      setTimeout(() => setFresh((ids) => new Set([...ids].filter((id) => id !== received))), freshFor)
+  const live = useLiveInbox(place.api, (event) => {
+    const id = event?.id
+    if (event?.name === 'received' && id) {
+      setFresh((ids) => new Set(ids).add(id))
+      setTimeout(() => setFresh((ids) => new Set([...ids].filter((freshId) => freshId !== id))), freshFor)
     }
+    if (event?.name === 'removed') {
+      setList((held) => ({ ...held, messages: held.messages.filter((message) => message.id !== id) }))
+    }
+    if (openId && (event?.name === 'emptied' || (event?.name === 'removed' && id === openId))) navigate(place.page, 'replace')
     load('', true)
     onLiveChange?.()
   })

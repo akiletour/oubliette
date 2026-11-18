@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ChevronsUpDown, Link2, LogOut, Pencil, Trash2 } from 'lucide-react'
+import { ChevronsUpDown, Eraser, Link2, LogOut, Pencil, Trash2 } from 'lucide-react'
 import type { Session } from './App'
 import { t } from './i18n'
-import { DeleteInboxDialog, InboxNameDialog, InboxNav, SwitchInboxDialog } from './Inboxes'
-import { getJSON, inboxPath, request, type Inbox, type ShareLink } from './messages'
+import { DeleteInboxDialog, EmptyInboxDialog, InboxNameDialog, InboxNav, SwitchInboxDialog } from './Inboxes'
+import { RequestFailed, getJSON, inboxPath, messageAt, request, type Inbox, type ShareLink } from './messages'
 import { link, navigate, usePath } from './router'
 import { SharingDialog } from './Sharing'
 import { IconButton, ThemeToggle, cn, icon, primaryButton, textLink } from './ui'
@@ -11,7 +11,7 @@ import { MessageList, Workspace, type Place } from './Workspace'
 
 const route = /^\/inboxes\/([^/]+)(?:\/messages\/([^/]+))?$/
 
-type InboxDialog = 'create' | 'rename' | 'delete' | 'switch' | 'share'
+type InboxDialog = 'create' | 'rename' | 'empty' | 'delete' | 'switch' | 'share'
 
 const placeOf = (inbox: Inbox): Place => ({
   key: inbox.id,
@@ -68,6 +68,22 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
     navigate('/', 'replace')
   }
 
+  async function emptyInbox(id: string) {
+    await request('DELETE', `/api/inboxes/${id}/messages`, undefined, onSessionChange)
+    navigate(inboxPath(id))
+    await loadInboxes()
+  }
+
+  async function deleteMessage(inboxId: string, id: string) {
+    try {
+      await request('DELETE', messageAt(`/api/inboxes/${inboxId}`, id), undefined, onSessionChange)
+    } catch (error) {
+      if (!(error instanceof RequestFailed && error.status === 404)) throw error
+    }
+    navigate(inboxPath(inboxId))
+    await loadInboxes()
+  }
+
   const sharingOf = (id: string) => ({
     list: async () => (await getJSON<{ shareLinks: ShareLink[] }>(`/api/inboxes/${id}/share-links`, onSessionChange)).shareLinks,
     create: (label: string, expiresAt?: string) => request('POST', `/api/inboxes/${id}/share-links`, { label, expiresAt }, onSessionChange),
@@ -85,6 +101,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
         place={place}
         messageId={messageId}
         onSessionEnd={onSessionChange}
+        onDeleteMessage={selected && ((id) => deleteMessage(selected.id, id))}
         footer={
           <>
             <Account session={session} onSignOut={signOut} className="flex-1 lg:hidden" />
@@ -114,6 +131,9 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
                 </IconButton>
                 <IconButton label={t.renameInbox} onClick={() => setDialog('rename')}>
                   <Pencil {...icon} />
+                </IconButton>
+                <IconButton label={t.emptyTheInbox} onClick={() => setDialog('empty')} disabled={place.messageCount === 0}>
+                  <Eraser {...icon} />
                 </IconButton>
                 <IconButton label={t.deleteInbox} onClick={() => setDialog('delete')}>
                   <Trash2 {...icon} />
@@ -157,6 +177,9 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
           onSubmit={(name) => renameInbox(selected.id, name)}
           onClose={closeDialog('rename')}
         />
+      )}
+      {dialog === 'empty' && selected && (
+        <EmptyInboxDialog inbox={selected} onEmpty={() => emptyInbox(selected.id)} onClose={closeDialog('empty')} />
       )}
       {dialog === 'delete' && selected && (
         <DeleteInboxDialog inbox={selected} onDelete={() => deleteInbox(selected.id)} onClose={closeDialog('delete')} />

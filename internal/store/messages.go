@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	ErrPosition     = errors.New("malformed position in the Message list")
-	ErrInboxName    = errors.New("an Inbox name needs 1 to 100 visible characters and no control character")
-	ErrInboxUnknown = errors.New("no such Inbox")
+	ErrPosition       = errors.New("malformed position in the Message list")
+	ErrInboxName      = errors.New("an Inbox name needs 1 to 100 visible characters and no control character")
+	ErrInboxUnknown   = errors.New("no such Inbox")
+	ErrMessageUnknown = errors.New("no such Message")
 )
 
 var unknownInboxPassword = rand.Text()
@@ -225,6 +226,16 @@ func (s *Store) Message(ctx context.Context, inboxID, id string) (Message, bool,
 	}
 	message.Raw = raw
 	return message, err == nil, err
+}
+
+func (s *Store) DeleteMessage(ctx context.Context, inboxID, id string) error {
+	result, err := s.db.ExecContext(ctx, "DELETE FROM messages WHERE inbox_id = ? AND id = ?", inboxID, id)
+	return whenNoRow(result, err, ErrMessageUnknown)
+}
+
+func (s *Store) EmptyInbox(ctx context.Context, inboxID string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM messages WHERE inbox_id = ?", inboxID)
+	return err
 }
 
 func fold(text string) string {

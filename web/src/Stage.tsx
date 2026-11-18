@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Download, FileText, Info, Monitor, PanelRight, Smartphone, Tablet, X } from 'lucide-react'
+import { ChevronDown, Download, FileText, Info, Monitor, PanelRight, Smartphone, Tablet, Trash2, X } from 'lucide-react'
 import { formatSize, fullDate, relativeTime, t } from './i18n'
 import { RequestFailed, fromTo, getJSON, messageAt, request, useMinuteTick, type OpenedMessage } from './messages'
 import { link, navigate } from './router'
-import { Eyebrow, IconButton, cn, icon, iconButton, textLink } from './ui'
+import { Eyebrow, IconButton, Refusal, cn, icon, iconButton, textLink, useSubmission } from './ui'
 import type { Place } from './Workspace'
 
 const views = ['rendered', 'text', 'source', 'raw'] as const
@@ -19,7 +19,19 @@ export type Preview = {
   onInspector: (open: boolean) => void
 }
 
-export function Stage({ place, messageId, onSessionEnd, preview }: { place: Place; messageId: string; onSessionEnd: () => void; preview: Preview }) {
+export function Stage({
+  place,
+  messageId,
+  onSessionEnd,
+  onDelete,
+  preview,
+}: {
+  place: Place
+  messageId: string
+  onSessionEnd: () => void
+  onDelete?: () => Promise<unknown>
+  preview: Preview
+}) {
   const [opened, setOpened] = useState<OpenedMessage | 'missing' | 'failed'>()
   const [chosen, setChosen] = useState<View>()
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -64,7 +76,7 @@ export function Stage({ place, messageId, onSessionEnd, preview }: { place: Plac
               <time dateTime={opened.receivedAt}>{relativeTime(receivedAt)}</time>
             </p>
           </div>
-          {view === 'rendered' && <WidthToggle value={preview.width} onChange={preview.onWidth} className="md:hidden" />}
+          {view === 'rendered' && <WidthToggle value={preview.width} onChange={preview.onWidth} className="ml-auto md:hidden" />}
           <IconButton
             label={preview.inspector ? t.hideDetails : t.showDetails}
             aria-pressed={preview.inspector}
@@ -73,6 +85,7 @@ export function Stage({ place, messageId, onSessionEnd, preview }: { place: Plac
           >
             <PanelRight {...icon} />
           </IconButton>
+          {onDelete && <DeleteButton onDelete={onDelete} />}
         </header>
 
         {view === 'rendered' ? (
@@ -144,6 +157,22 @@ export function Stage({ place, messageId, onSessionEnd, preview }: { place: Plac
         </div>
       </aside>
     </div>
+  )
+}
+
+function DeleteButton({ onDelete }: { onDelete: () => Promise<unknown> }) {
+  const [state, submit] = useSubmission(onDelete, () => {})
+  return (
+    <form onSubmit={submit} className="relative">
+      <IconButton type="submit" label={t.deleteMessage} disabled={state === 'busy'}>
+        <Trash2 {...icon} />
+      </IconButton>
+      {state === 'failed' && (
+        <div className="absolute top-full right-0 z-10 mt-1 w-max max-w-64 rounded-md border border-line bg-surface-raised px-3 py-2 text-label shadow-raised">
+          <Refusal state={state} />
+        </div>
+      )}
+    </form>
   )
 }
 

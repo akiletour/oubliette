@@ -104,6 +104,28 @@ func TestMembersAndVisitorsHearOfEachMessageArrivingInTheirInbox(t *testing.T) {
 	}
 }
 
+func TestMembersAndVisitorsHearOfMessagesLeavingTheirInbox(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	shop := member.CreateInbox("Shop")
+	i.CaptureIn(shop, "Order")
+	order := member.MessagesIn(shop.ID)[0].ID
+	visitor := i.Browser().Stream("/api/share/" + member.Share(shop.ID, "Client").Token)
+	watching := member.Stream("/api/inboxes/" + shop.ID)
+
+	member.Do(http.MethodDelete, "/api/inboxes/"+shop.ID+"/messages/"+order, "")
+	member.Do(http.MethodDelete, "/api/inboxes/"+shop.ID+"/messages", "")
+
+	for who, events := range map[string]*stream{"Visitor": visitor, "Member": watching} {
+		if got, open := events.Next(); !open || got != (event{Name: "removed", ID: order}) {
+			t.Errorf("the %s watching Shop first hears %+v (open %v), want the Order removed", who, got, open)
+		}
+		if got, open := events.Next(); !open || got != (event{Name: "emptied"}) {
+			t.Errorf("the %s watching Shop then hears %+v (open %v), want Shop emptied", who, got, open)
+		}
+	}
+}
+
 func TestRevokingAShareLinkClosesItsEventStream(t *testing.T) {
 	i := start(t)
 	member := i.SignedInMember()
