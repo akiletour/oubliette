@@ -6,9 +6,11 @@ export type Message = { id: string; receivedAt: string; subject: string; preview
 
 export type OpenedMessage = Message & { text: string; hasHTML: boolean }
 
+export type ShareLink = { id: string; label: string; token: string; createdAt: string }
+
 export const inboxPath = (inboxId: string) => `/inboxes/${inboxId}`
 
-export const messagePath = (inboxId: string, messageId: string) => `${inboxPath(inboxId)}/messages/${messageId}`
+export const messageAt = (base: string, messageId: string) => `${base}/messages/${messageId}`
 
 export class RequestFailed extends Error {
   status: number

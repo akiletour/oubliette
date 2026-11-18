@@ -273,6 +273,31 @@ func (b *browser) MessagesIn(inboxID string) []message {
 	return b.PageOf(inboxID, "").Messages
 }
 
+type shareLink struct {
+	ID    string
+	Label string
+	Token string
+}
+
+func labelled(label string) string {
+	body, _ := json.Marshal(map[string]string{"label": label})
+	return string(body)
+}
+
+func (b *browser) Share(inboxID, label string) shareLink {
+	t := b.i.t
+	t.Helper()
+	created := b.Do(http.MethodPost, "/api/inboxes/"+inboxID+"/share-links", labelled(label))
+	if created.Status != http.StatusCreated {
+		t.Fatalf("share Inbox %s = %d %s, want 201", inboxID, created.Status, created.Body)
+	}
+	var link shareLink
+	if err := json.Unmarshal([]byte(created.Body), &link); err != nil {
+		t.Fatalf("created Share Link %s: %v", created.Body, err)
+	}
+	return link
+}
+
 func (b *browser) InboxNamed(name string) listedInbox {
 	b.i.t.Helper()
 	for _, inbox := range b.Inboxes() {

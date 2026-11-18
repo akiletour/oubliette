@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -34,34 +33,36 @@ type api struct {
 	throttle throttle
 }
 
-type session struct {
-	member store.Member
-	token  string
-}
-
-type sessionKey struct{}
-
 func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
 	a := &api{store: storage, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
-
-	signedIn := http.NewServeMux()
-	signedIn.HandleFunc("GET /api/session", a.showSession)
-	signedIn.HandleFunc("DELETE /api/session", a.signOut)
-	signedIn.HandleFunc("GET /api/inboxes", a.listInboxes)
-	signedIn.HandleFunc("POST /api/inboxes", a.createInbox)
-	signedIn.HandleFunc("PATCH /api/inboxes/{inbox}", a.renameInbox)
-	signedIn.HandleFunc("DELETE /api/inboxes/{inbox}", a.deleteInbox)
-	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages", a.listMessages)
-	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}", a.openMessage)
-	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.renderMessage)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	})
 	mux.HandleFunc("POST /api/session", a.signIn)
-	mux.Handle("/api/", a.requireMember(signedIn))
+
+	mux.Handle("GET /api/session", a.member(a.showSession))
+	mux.Handle("DELETE /api/session", a.member(a.signOut))
+	mux.Handle("GET /api/inboxes", a.member(a.listInboxes))
+	mux.Handle("POST /api/inboxes", a.member(a.createInbox))
+	mux.Handle("PATCH /api/inboxes/{inbox}", a.member(a.renameInbox))
+	mux.Handle("DELETE /api/inboxes/{inbox}", a.member(a.deleteInbox))
+	mux.Handle("GET /api/inboxes/{inbox}/messages", a.member(a.listMessages))
+	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}", a.member(a.openMessage))
+	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
+	mux.Handle("POST /api/inboxes/{inbox}/share-links", a.member(a.createShareLink))
+
+	mux.Handle("GET /api/share/{token}", a.visitor(a.showSharedInbox))
+	mux.Handle("GET /api/share/{token}/messages", a.visitor(a.listMessages))
+	mux.Handle("GET /api/share/{token}/messages/{message}", a.visitor(a.openMessage))
+	mux.Handle("GET /api/share/{token}/messages/{message}/rendered", a.visitor(a.renderMessage))
+
 	mux.HandleFunc("GET /inboxes/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, ui, "index.html")
+	})
+	mux.HandleFunc("GET /s/", func(w http.ResponseWriter, r *http.Request) {
+		unlisted(w)
 		http.ServeFileFS(w, r, ui, "index.html")
 	})
 	mux.Handle("/", http.FileServerFS(ui))
@@ -99,27 +100,6 @@ func (t *throttle) forget(email string) {
 	delete(t.streaks, sha256.Sum256([]byte(email)))
 }
 
-func (a *api) requireMember(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookie)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "sign in required")
-			return
-		}
-		member, valid, err := a.store.SessionMember(r.Context(), cookie.Value, a.now())
-		if err != nil {
-			a.fail(w, r, err)
-			return
-		}
-		if !valid {
-			writeError(w, http.StatusUnauthorized, "sign in required")
-			return
-		}
-		ctx := context.WithValue(r.Context(), sessionKey{}, session{member: member, token: cookie.Value})
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
 func (a *api) signIn(w http.ResponseWriter, r *http.Request) {
 	var submitted struct {
 		Email    string `json:"email"`
@@ -154,12 +134,12 @@ func (a *api) signIn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) showSession(w http.ResponseWriter, r *http.Request) {
-	current := r.Context().Value(sessionKey{}).(session)
+	current := scopeOf(r).session
 	writeJSON(w, http.StatusOK, map[string]string{"email": current.member.Email})
 }
 
 func (a *api) signOut(w http.ResponseWriter, r *http.Request) {
-	current := r.Context().Value(sessionKey{}).(session)
+	current := scopeOf(r).session
 	if err := a.store.EndSession(r.Context(), current.token); err != nil {
 		a.fail(w, r, err)
 		return
@@ -199,7 +179,7 @@ func (a *api) createInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inbox, err := a.store.CreateInbox(r.Context(), name, a.now())
-	if a.refusedInboxChange(w, r, err) {
+	if a.refused(w, r, err) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, struct {
@@ -214,20 +194,41 @@ func (a *api) renameInbox(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !a.refusedInboxChange(w, r, a.store.RenameInbox(r.Context(), r.PathValue("inbox"), name)) {
+	if !a.refused(w, r, a.store.RenameInbox(r.Context(), r.PathValue("inbox"), name)) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
-	if !a.refusedInboxChange(w, r, a.store.DeleteInbox(r.Context(), r.PathValue("inbox"))) {
+	if !a.refused(w, r, a.store.DeleteInbox(r.Context(), r.PathValue("inbox"))) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func (a *api) refusedInboxChange(w http.ResponseWriter, r *http.Request, err error) bool {
+func (a *api) createShareLink(w http.ResponseWriter, r *http.Request) {
+	var submitted struct {
+		Label string `json:"label"`
+	}
+	if !decode(w, r, &submitted) {
+		return
+	}
+	link, err := a.store.CreateShareLink(r.Context(), r.PathValue("inbox"), submitted.Label, a.now())
+	if !a.refused(w, r, err) {
+		writeJSON(w, http.StatusCreated, link)
+	}
+}
+
+func (a *api) showSharedInbox(w http.ResponseWriter, r *http.Request) {
+	shared := scopeOf(r).shared
+	writeJSON(w, http.StatusOK, struct {
+		Name         string `json:"name"`
+		MessageCount int    `json:"messageCount"`
+	}{shared.Name, shared.MessageCount})
+}
+
+func (a *api) refused(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
-	case errors.Is(err, store.ErrInboxName):
+	case errors.Is(err, store.ErrInboxName), errors.Is(err, store.ErrShareLinkLabel):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrInboxUnknown):
 		writeError(w, http.StatusNotFound, err.Error())
@@ -240,13 +241,8 @@ func (a *api) refusedInboxChange(w http.ResponseWriter, r *http.Request, err err
 }
 
 func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
-	inbox, found, err := a.store.Inbox(r.Context(), r.PathValue("inbox"))
-	if err != nil {
-		a.fail(w, r, err)
-		return
-	}
+	inbox, found := a.inboxInScope(w, r)
 	if !found {
-		writeError(w, http.StatusNotFound, "no such Inbox")
 		return
 	}
 	messages, next, err := a.store.Messages(r.Context(), inbox.ID, r.URL.Query().Get("before"))
@@ -262,7 +258,11 @@ func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) heldMessage(w http.ResponseWriter, r *http.Request) (store.Message, content.Body, bool) {
-	message, found, err := a.store.Message(r.Context(), r.PathValue("inbox"), r.PathValue("message"))
+	inbox, found := a.inboxInScope(w, r)
+	if !found {
+		return store.Message{}, content.Body{}, false
+	}
+	message, found, err := a.store.Message(r.Context(), inbox.ID, r.PathValue("message"))
 	if err != nil {
 		a.fail(w, r, err)
 		return store.Message{}, content.Body{}, false

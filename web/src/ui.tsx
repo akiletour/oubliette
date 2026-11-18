@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { Search, X } from 'lucide-react'
+import { Moon, Search, Sun, X } from 'lucide-react'
 import { t } from './i18n'
+import { setTheme, useTheme } from './theme'
 
 export const cn = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ')
 
@@ -12,6 +13,8 @@ const button = 'h-11 rounded-md px-4 font-medium transition-[scale,color,backgro
 export const primaryButton = cn(button, 'bg-fg text-bg disabled:bg-fg-disabled')
 
 export const secondaryButton = cn(button, 'text-fg-muted hover:bg-hover hover:text-fg')
+
+export const borderedButton = cn(secondaryButton, 'border border-line-strong')
 
 export const icon = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as const
 
@@ -104,4 +107,14 @@ export function FilterField({ label, value, onChange, className }: { label: stri
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return <h2 className={cn('text-caption font-medium tracking-wider text-fg-subtle uppercase', className)}>{children}</h2>
+}
+
+export function ThemeToggle() {
+  const theme = useTheme()
+  const next = theme === 'dark' ? 'light' : 'dark'
+  return (
+    <IconButton label={next === 'dark' ? t.toDarkTheme : t.toLightTheme} onClick={() => setTheme(next)}>
+      {theme === 'dark' ? <Sun {...icon} /> : <Moon {...icon} />}
+    </IconButton>
+  )
 }

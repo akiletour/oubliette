@@ -20,7 +20,7 @@ import (
 
 const (
 	pageSize        = 50
-	maxInboxName    = 100
+	maxName         = 100
 	zeroWidthJoiner = '‍'
 )
 
@@ -57,15 +57,20 @@ func newID() string {
 	return strings.ToLower(rand.Text())
 }
 
-func inboxName(name string) (string, error) {
+func cleanName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
-	visible := strings.IndexFunc(name, func(r rune) bool {
+	shown := strings.IndexFunc(name, func(r rune) bool {
 		return unicode.In(r, unicode.L, unicode.N, unicode.P, unicode.S)
 	}) >= 0
 	hidden := strings.IndexFunc(name, func(r rune) bool {
 		return unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) && r != zeroWidthJoiner
 	}) >= 0
-	if !visible || hidden || utf8.RuneCountInString(name) > maxInboxName {
+	return name, shown && !hidden && utf8.RuneCountInString(name) <= maxName
+}
+
+func inboxName(name string) (string, error) {
+	name, ok := cleanName(name)
+	if !ok {
 		return "", ErrInboxName
 	}
 	return name, nil
@@ -125,8 +130,7 @@ func (s *Store) DeleteInbox(ctx context.Context, id string) error {
 
 func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, (SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)
-		FROM inboxes ORDER BY id`)
+		"SELECT id, name, "+messageCount+" FROM inboxes ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +190,8 @@ func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message
 		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(message.Raw), message.Raw)
 	return err
 }
+
+const messageCount = "(SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)"
 
 const messageColumns = "id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size"
 

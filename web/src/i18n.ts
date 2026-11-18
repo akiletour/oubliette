@@ -47,6 +47,20 @@ const en = {
   noInboxHint: 'Create an inbox for each application whose emails you want to capture.',
   switchInbox: 'Switch inbox',
   inboxNameRefused: 'Use 1 to 100 visible characters, without line breaks.',
+  shareInbox: 'Share the inbox',
+  shareTitle: (name: string) => `Share “${name}”`,
+  shareWarning: 'Anyone with this link can read every message of this inbox, without signing in.',
+  shareLabel: 'Who is it for?',
+  shareLabelExample: 'Brand review team',
+  shareURL: (label: string) => `Link for ${label}`,
+  createLink: 'Create the link',
+  copy: 'Copy',
+  copied: 'Copied',
+  done: 'Done',
+  readOnly: 'read only',
+  emptyInboxVisitorHint: 'Emails sent by the site will appear here.',
+  linkGone: 'This link is no longer active',
+  linkGoneHint: 'Ask the person who sent it to you for a new one.',
 }
 
 const fr: typeof en = {
@@ -98,6 +112,20 @@ const fr: typeof en = {
   noInboxHint: 'Créez une boîte pour chaque application dont vous voulez capturer les e-mails.',
   switchInbox: 'Changer de boîte',
   inboxNameRefused: 'Utilisez de 1 à 100 caractères visibles, sans retour à la ligne.',
+  shareInbox: 'Partager la boîte',
+  shareTitle: (name: string) => `Partager « ${name} »`,
+  shareWarning: 'Toute personne qui a ce lien peut lire tous les messages de cette boîte, sans se connecter.',
+  shareLabel: 'Pour qui ?',
+  shareLabelExample: 'Équipe recette de la marque',
+  shareURL: (label: string) => `Lien pour ${label}`,
+  createLink: 'Créer le lien',
+  copy: 'Copier',
+  copied: 'Copié',
+  done: 'Terminé',
+  readOnly: 'lecture seule',
+  emptyInboxVisitorHint: 'Les e-mails envoyés par le site apparaîtront ici.',
+  linkGone: 'Ce lien n’est plus actif',
+  linkGoneHint: 'Demandez-en un nouveau à la personne qui vous l’a envoyé.',
 }
 
 const catalogs = { en, fr }

@@ -1,31 +1,23 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { relativeTime, t } from './i18n'
-import {
-  RequestFailed,
-  fromTo,
-  getJSON,
-  inboxPath,
-  messagePath,
-  useMinuteTick,
-  type Inbox,
-  type OpenedMessage,
-} from './messages'
+import { RequestFailed, fromTo, getJSON, messageAt, useMinuteTick, type OpenedMessage } from './messages'
 import { link, navigate } from './router'
 import { IconButton, cn, icon, textLink } from './ui'
+import type { Place } from './Workspace'
 
 const views = ['rendered', 'text'] as const
 
 type View = (typeof views)[number]
 
-export function Stage({ inbox, messageId, onSessionEnd }: { inbox: Inbox; messageId: string; onSessionEnd: () => void }) {
+export function Stage({ place, messageId, onSessionEnd }: { place: Place; messageId: string; onSessionEnd: () => void }) {
   const [opened, setOpened] = useState<OpenedMessage | 'missing' | 'failed'>()
   const [chosen, setChosen] = useState<View>()
-  const path = messagePath(inbox.id, messageId)
+  const api = messageAt(place.api, messageId)
   useMinuteTick()
 
   useEffect(() => {
-    getJSON<OpenedMessage>(`/api${path}`, onSessionEnd).then(setOpened, (error) =>
+    getJSON<OpenedMessage>(api, onSessionEnd).then(setOpened, (error) =>
       setOpened(error instanceof RequestFailed && error.status === 404 ? 'missing' : 'failed'),
     )
   }, [])
@@ -35,8 +27,8 @@ export function Stage({ inbox, messageId, onSessionEnd }: { inbox: Inbox; messag
     return (
       <Notice>
         <p className="font-medium">{opened === 'missing' ? t.messageMissing : t.messageFailed}</p>
-        <a {...link(inboxPath(inbox.id))} className={textLink}>
-          {t.goToInbox(inbox.name)}
+        <a {...link(place.page)} className={textLink}>
+          {t.goToInbox(place.name)}
         </a>
       </Notice>
     )
@@ -49,7 +41,7 @@ export function Stage({ inbox, messageId, onSessionEnd }: { inbox: Inbox; messag
   return (
     <div className="relative flex min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 items-start gap-2 px-3 pt-2 pb-3 max-md:flex-wrap md:px-6 md:pt-5 md:pb-4">
-        <IconButton label={t.closeMessage} onClick={() => navigate(inboxPath(inbox.id))} className="md:hidden">
+        <IconButton label={t.closeMessage} onClick={() => navigate(place.page)} className="md:hidden">
           <ChevronDown {...icon} />
         </IconButton>
         <div className="min-w-0 flex-1 max-md:basis-full max-md:px-2">
@@ -68,7 +60,7 @@ export function Stage({ inbox, messageId, onSessionEnd }: { inbox: Inbox; messag
           <div className="flex-1 overflow-hidden rounded-lg bg-email-canvas shadow-raised md:rounded-xl">
             <iframe
               title={t.renderingOf(subject)}
-              src={`/api${path}/rendered`}
+              src={`${api}/rendered`}
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               className="block size-full border-0 scheme-light"
             />

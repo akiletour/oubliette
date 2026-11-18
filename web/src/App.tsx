@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Shell } from './Shell'
 import { SignIn } from './SignIn'
+import { Visitor } from './Visitor'
 
 export type Session = { email: string }
 
@@ -14,6 +15,10 @@ async function fetchSession(): Promise<Session | null> {
 }
 
 export function App() {
+  return window.location.pathname.startsWith('/s/') ? <Visitor /> : <Member />
+}
+
+function Member() {
   const [session, setSession] = useState<Session | null>()
   const refresh = () => fetchSession().then(setSession)
 
