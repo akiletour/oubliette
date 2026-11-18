@@ -1,24 +1,73 @@
 # Oubliette
 
-A sandbox SMTP server for staging Applications. It holds every Message an Application sends, delivers none of them, and shows them to Members in a web interface.
+An oubliette is a dungeon you drop into through a trapdoor in the ceiling, and nobody comes back out. This one is for email. Your staging sites send their mail to it over SMTP, it keeps every Message, and none of them ever reaches a real person.
 
-It is one binary with the interface embedded and all its state in one SQLite file. It reads no configuration file: every setting is a command-line flag or an environment variable.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/main-dark.webp">
+  <img alt="The Oubliette interface: the Inbox list on the left, the Messages of the Harbour Bakery staging Inbox in the middle, and an order confirmation email rendered on the right." src="docs/screenshots/main-light.webp">
+</picture>
 
-## Build
+Each staging Application gets its own Inbox, chosen by the Credentials it signs in with. The agency's Members see every Inbox. A customer gets a Share Link to their own Inbox and reads their emails without an account, so nobody has to forward screenshots any more.
 
-```sh
-make build
-```
+It ships as one binary with the interface built in, and keeps everything in one SQLite file.
 
-This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 24.
+## The interface
 
-To build the container image instead, which needs only Docker:
+### Every email as the customer will see it
+
+Messages land in the list as they arrive, grouped by day, with a green Live dot that tells you the list is listening. The filter matches subject, sender and recipient. An email renders in a sandboxed frame with its scripts blocked, and the toggle under it narrows the frame to 375 px or 768 px to check the mobile layout. Text, Source and Raw show the same Message as the Application sent it.
+
+The theme follows your system, or the moon button. The language follows the browser, in English or French.
+
+### What the Application actually sent
+
+<img alt="The details panel of an invoice email, listing the sender, the size, a PDF attachment, the SMTP envelope and every header." src="docs/screenshots/inspector-light.webp">
+
+The details panel shows the headers, the attachments and the SMTP envelope. The envelope is where the surprises are: a recipient in `RCPT TO` who appears in no header is a Bcc your template didn't mean to send. Attachments always download, with a neutral type, so nothing in them runs in the browser.
+
+### Plugging in an Application
+
+<img alt="The Integration tab of an Inbox, with the SMTP host, port, username and password, each with a copy button, and a block of environment variables." src="docs/screenshots/integration-light.webp">
+
+The Integration tab gives the host, port, username and password, and the same four as environment variables to paste into the Application's `.env`. Regenerating them refuses the old pair at once, even on a connection that is already open.
+
+### What the customer sees
+
+<img width="720" alt="A Share Link opened on a phone: the read-only list of the Harbour Bakery Inbox, and the welcome email opened at mobile width." src="docs/screenshots/visitor.webp">
+
+A Share Link opens one Inbox, read-only, on a laptop or a phone. It can expire on a date, an Inbox can have several, and revoking one leaves the others working. The sharing tab shows when each link was last opened.
+
+## Try it on your machine
+
+Build the image and start it without encryption, which is fine on your own machine:
 
 ```sh
 docker build -t oubliette .
+docker run -d --name oubliette -p 8080:8080 -p 1025:1025 \
+  -e OUBLIETTE_SMTP_INSECURE_AUTH=true oubliette
 ```
 
-## Run in a container
+Create yourself a Member. It asks for the password twice:
+
+```sh
+docker exec -it oubliette oubliette member add you@example.com
+```
+
+The first start creates an Inbox called Default and logs its Credentials once:
+
+```sh
+docker logs oubliette | grep smtp_username
+```
+
+Send it something, then open http://localhost:8080 and sign in:
+
+```sh
+printf 'Subject: Hello from staging\r\n\r\nIt works.\r\n' > hello.eml
+curl --url smtp://localhost:1025 --user USERNAME:PASSWORD \
+  --mail-from app@example.com --mail-rcpt someone@example.com --upload-file hello.eml
+```
+
+## Running it for real
 
 ```sh
 docker volume create oubliette-data
@@ -33,33 +82,28 @@ docker run -d --name oubliette \
 
 The image runs as the non-root user 65532 and keeps its data file at `/data/oubliette.db`. A named volume works as is. A host directory mounted on `/data` must be writable by user 65532, and the certificate files must be readable by that user.
 
-On its first start, Oubliette creates an Inbox named "Default" and logs its SMTP Credentials once:
-
-```sh
-docker logs oubliette | grep smtp_username
-```
-
-Without Docker, run the binary with the same settings: `./oubliette --data /var/lib/oubliette/oubliette.db --smtp-tls-cert tls.crt --smtp-tls-key tls.key serve`.
-
-## Create the first Member
-
-No one can sign in until the Operator creates a Member. Run the `member` command against the same data file, here inside the running container:
-
-```sh
-docker exec -it oubliette oubliette member add you@example.com
-```
-
-It asks for the password twice. From a script, pass the password on standard input:
+To create Members from a script, pass the password on standard input:
 
 ```sh
 printf '%s\n' "$PASSWORD" | docker exec -i oubliette oubliette member add you@example.com
 ```
 
-`member list`, `member remove <email>` and `member set-password <email>` manage the other accounts. Without Docker, run `./oubliette --data <file> member add <email>`.
+`member list`, `member remove <email>` and `member set-password <email>` manage the other accounts. There is no sign-up and no password reset by email. Members exist only when the Operator creates them.
+
+### SMTP encryption
+
+The server won't start without a certificate (`--smtp-tls-cert` and `--smtp-tls-key`) or the override `--smtp-insecure-auth`. With a certificate, Applications must use STARTTLS before they authenticate, unless the override is also set. In that case the override wins and the server logs a warning at start, so remove the override when you add a certificate. The files are read again at each TLS handshake, which means a certificate renewed by cert-manager or ACME is picked up without a restart.
+
+Behind a reverse proxy, SMTP needs its own TCP port. STARTTLS begins in cleartext, so a proxy can't route it by SNI. Two setups work:
+
+- The proxy passes the TCP connection through, and Oubliette does STARTTLS with a mounted certificate. That can be a cert-manager Secret, Caddy's PEM files on a shared volume, or a certificate extracted from Traefik's `acme.json`.
+- The proxy terminates implicit TLS on port 465 and forwards cleartext to Oubliette, which then runs with `--smtp-insecure-auth` on the private network behind it.
+
+The web interface is served in plain HTTP. Let the reverse proxy terminate TLS for it.
 
 ## Settings
 
-Each flag has an environment variable with the `OUBLIETTE_` prefix. A flag wins over its variable. `./oubliette --help` prints the same list.
+Every flag has an environment variable with the `OUBLIETTE_` prefix, and the flag wins when both are set. There is no configuration file. `oubliette --help` prints the same list.
 
 | Flag | Variable | Default | Meaning |
 | --- | --- | --- | --- |
@@ -68,43 +112,31 @@ Each flag has an environment variable with the `OUBLIETTE_` prefix. A flag wins 
 | `--smtp-addr` | `OUBLIETTE_SMTP_ADDR` | `:1025` | Address the SMTP server listens on. |
 | `--smtp-tls-cert` | `OUBLIETTE_SMTP_TLS_CERT` | none | PEM certificate the SMTP server offers through STARTTLS. |
 | `--smtp-tls-key` | `OUBLIETTE_SMTP_TLS_KEY` | none | PEM private key of that certificate. |
-| `--smtp-insecure-auth` | `OUBLIETTE_SMTP_INSECURE_AUTH` | `false` | Accept SMTP authentication without encryption. Use it only on a private network. |
-| `--smtp-advertised-host` | `OUBLIETTE_SMTP_ADVERTISED_HOST` | the host of the page | SMTP host shown to Members in the Integration tab. |
-| `--smtp-advertised-port` | `OUBLIETTE_SMTP_ADVERTISED_PORT` | the listening port | SMTP port shown to Members in the Integration tab. |
+| `--smtp-insecure-auth` | `OUBLIETTE_SMTP_INSECURE_AUTH` | `false` | Accept SMTP authentication without encryption. Only on a private network. |
+| `--smtp-advertised-host` | `OUBLIETTE_SMTP_ADVERTISED_HOST` | the host of the page | SMTP host shown in the Integration tab. |
+| `--smtp-advertised-port` | `OUBLIETTE_SMTP_ADVERTISED_PORT` | the listening port | SMTP port shown in the Integration tab. |
 | `--retention-days` | `OUBLIETTE_RETENTION_DAYS` | `30` | Days a Message is kept before it is purged, from 1 to 36500. |
 | `--inbox-cap` | `OUBLIETTE_INBOX_CAP` | `1000` | Messages an Inbox holds, the oldest leaving first, from 1 to 1000000. |
 | `--max-message-mb` | `OUBLIETTE_MAX_MESSAGE_MB` | `25` | Largest Message accepted, in MB of 1,048,576 bytes, from 1 to 100. |
 
-A boolean variable takes `true` or `false`. A value that cannot be read stops the server at start, with a message naming the setting.
+A boolean takes `true` or `false`. A value Oubliette can't read stops the server at start, with a message naming the setting.
 
-## SMTP encryption
+## Looking after it
 
-The server will not start unless it has a certificate (`--smtp-tls-cert` and `--smtp-tls-key`) or the override `--smtp-insecure-auth`. With a certificate, Applications must use STARTTLS before they authenticate, unless the override is also set: the override wins, and the server logs a warning at start. When you add a certificate to an instance that ran with the override, remove the override. The files are read again at each TLS handshake, so a certificate renewed by the platform (cert-manager, ACME) is used without a restart.
+`GET /healthz` answers `200` without authentication, for the platform's probes. Logs go to standard output, one `key=value` line per event.
 
-Behind a reverse proxy, SMTP needs its own TCP port. STARTTLS begins in cleartext, so a proxy cannot route it by SNI. There are two setups:
-
-- The proxy passes the TCP connection through, and Oubliette performs STARTTLS with a mounted certificate. This can be a cert-manager Secret, Caddy's PEM files on a shared volume, or a certificate extracted from Traefik's `acme.json`.
-- The proxy terminates implicit TLS on port 465 and forwards cleartext to Oubliette, which then runs with `--smtp-insecure-auth` on the private network behind it.
-
-The web interface is served in plain HTTP. Let the reverse proxy terminate TLS for it.
-
-## Supervision
-
-- `GET /healthz` answers `200` without authentication.
-- Logs go to standard output, one `key=value` line per event.
-
-## Stopping and backups
-
-On `SIGTERM` or `SIGINT` (`docker stop`), Oubliette:
+On `SIGTERM` or `SIGINT`, which is what `docker stop` sends, Oubliette:
 
 1. stops accepting connections;
-2. closes the SMTP connections that are not sending a Message;
+2. closes the SMTP connections that aren't sending a Message;
 3. lets a Message whose sending has begun (`MAIL FROM` answered) finish, for up to 8 seconds, then closes that connection;
 4. closes the data file with every write in it.
 
-A Message still arriving after 8 seconds is not held, its Application gets no `250` and should send it again, and Oubliette exits with status 1. Give the platform a grace period of at least 10 seconds, which is Docker's default.
+A Message still arriving after 8 seconds is not kept. Its Application gets no `250` and should send it again, and Oubliette exits with status 1. Give the platform a grace period of at least 10 seconds, which is Docker's default.
 
-While the server runs, recent writes live in a `-wal` file next to the data file, so copying the data file alone gives an incomplete or inconsistent backup. To back up, stop the server, copy the data file, then start it again. After a clean stop, the data file holds everything on its own.
+### Backups
+
+While the server runs, recent writes sit in a `-wal` file next to the data file, so a copy of the data file alone can miss them or be inconsistent. Stop the server, copy the file, start it again. After a clean stop the data file holds everything on its own.
 
 ```sh
 docker stop oubliette
@@ -113,3 +145,15 @@ docker start oubliette
 ```
 
 To restore, put the copy back as the data file while the server is stopped.
+
+## Building from source
+
+```sh
+make build
+```
+
+This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 24. `make test` runs `go vet` and the tests, which drive a real server over real SMTP and HTTP.
+
+## What it won't do
+
+Oubliette never delivers, relays or forwards a Message, and has no setting that would make it. It has no POP3 or IMAP, no search inside bodies, and no read or unread state. Customers get Share Links rather than accounts, and the whole state lives in one file written by one process, so it doesn't run as several replicas.
