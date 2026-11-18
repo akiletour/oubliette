@@ -46,7 +46,7 @@ docker run -d --name oubliette -p 8080:8080 -p 1025:1025 \
   -e OUBLIETTE_SMTP_INSECURE_AUTH=true akiletour/oubliette
 ```
 
-The image is on Docker Hub as `akiletour/oubliette` and on GitHub as `ghcr.io/akiletour/oubliette`, for amd64 and arm64.
+The image is on Docker Hub as `akiletour/oubliette` and on GitHub as `ghcr.io/akiletour/oubliette`, for amd64 and arm64. Each [release](https://github.com/akiletour/oubliette/releases) also has the binary on its own, for Linux, macOS and Windows.
 
 Create yourself a Member. It asks for the password twice:
 
