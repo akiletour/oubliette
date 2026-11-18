@@ -148,6 +148,7 @@ export function MessageList({
   openId,
   onSessionEnd,
   onLiveChange,
+  edits = 0,
   nameAction,
   actions,
   note,
@@ -157,6 +158,7 @@ export function MessageList({
   openId?: string
   onSessionEnd: () => void
   onLiveChange?: () => void
+  edits?: number
   nameAction?: ReactNode
   actions?: ReactNode
   note?: string
@@ -200,6 +202,13 @@ export function MessageList({
   useEffect(() => {
     load('')
   }, [filter])
+
+  const seenEdits = useRef(edits)
+  useEffect(() => {
+    if (edits === seenEdits.current) return
+    seenEdits.current = edits
+    load('', true)
+  }, [edits])
 
   return (
     <>

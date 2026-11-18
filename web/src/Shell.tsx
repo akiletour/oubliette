@@ -27,6 +27,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
   const [inboxes, setInboxes] = useState<Inbox[]>()
   const [failed, setFailed] = useState(false)
   const [dialog, setDialog] = useState<InboxDialog>()
+  const [edits, setEdits] = useState(0)
 
   const loadInboxes = () =>
     getJSON<{ inboxes: Inbox[] }>('/api/inboxes', onSessionChange).then(
@@ -70,6 +71,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
 
   async function emptyInbox(id: string) {
     await request('DELETE', `/api/inboxes/${id}/messages`, undefined, onSessionChange)
+    setEdits((count) => count + 1)
     navigate(inboxPath(id))
     await loadInboxes()
   }
@@ -80,6 +82,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
     } catch (error) {
       if (!(error instanceof RequestFailed && error.status === 404)) throw error
     }
+    setEdits((count) => count + 1)
     navigate(inboxPath(inboxId))
     await loadInboxes()
   }
@@ -123,6 +126,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
             openId={messageId}
             onSessionEnd={onSessionChange}
             onLiveChange={loadInboxes}
+            edits={edits}
             emptyHint={t.emptyInboxHint}
             nameAction={
               <>
