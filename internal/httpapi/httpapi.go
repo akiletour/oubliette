@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"oubliette/internal/content"
 	"oubliette/internal/store"
 )
 
@@ -22,6 +23,8 @@ const (
 	sessionLifetime = 30 * 24 * time.Hour
 	signInAttempts  = 5
 	signInLockout   = 15 * time.Minute
+	renderingPolicy = "sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; " +
+		"img-src * data:; style-src * 'unsafe-inline'; font-src * data:"
 )
 
 type api struct {
@@ -46,6 +49,8 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	signedIn.HandleFunc("DELETE /api/session", a.signOut)
 	signedIn.HandleFunc("GET /api/inboxes", a.listInboxes)
 	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages", a.listMessages)
+	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}", a.openMessage)
+	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.renderMessage)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +195,47 @@ func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "next": next})
+}
+
+func (a *api) heldMessage(w http.ResponseWriter, r *http.Request) (store.Message, content.Body, bool) {
+	message, found, err := a.store.Message(r.Context(), r.PathValue("inbox"), r.PathValue("message"))
+	if err != nil {
+		a.fail(w, r, err)
+		return store.Message{}, content.Body{}, false
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "no such Message")
+		return store.Message{}, content.Body{}, false
+	}
+	return message, content.Read(message.Raw), true
+}
+
+func (a *api) openMessage(w http.ResponseWriter, r *http.Request) {
+	message, body, found := a.heldMessage(w, r)
+	if !found {
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		store.Message
+		Text    string `json:"text"`
+		HasHTML bool   `json:"hasHTML"`
+	}{message, body.Text, body.HTML != ""})
+}
+
+func (a *api) renderMessage(w http.ResponseWriter, r *http.Request) {
+	_, body, found := a.heldMessage(w, r)
+	if !found {
+		return
+	}
+	if body.HTML == "" {
+		writeError(w, http.StatusNotFound, "this Message has no HTML version")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", renderingPolicy)
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	io.WriteString(w, body.Rendered())
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {

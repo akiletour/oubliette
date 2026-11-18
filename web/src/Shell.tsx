@@ -1,28 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LogOut, Moon, Sun } from 'lucide-react'
 import type { Session } from './App'
 import { dayLabel, relativeTime, t } from './i18n'
+import { fromTo, getJSON, inboxPath, messagePath, useMinuteTick, type Inbox, type Message } from './messages'
 import { link, navigate, usePath } from './router'
+import { Stage } from './Stage'
 import { setTheme, useTheme } from './theme'
-import { Eyebrow, IconButton, Mark, cn, icon, pressable } from './ui'
+import { Eyebrow, IconButton, Mark, cn, icon, pressable, textLink } from './ui'
 
-type Inbox = { id: string; name: string; messageCount: number }
+const route = /^\/inboxes\/([^/]+)(?:\/messages\/([^/]+))?$/
 
-type Message = { id: string; receivedAt: string; subject: string; preview: string; sender: string; recipients: string[] }
+function useMediaQuery(query: string) {
+  return useSyncExternalStore(
+    (notify) => {
+      const list = window.matchMedia(query)
+      list.addEventListener('change', notify)
+      return () => list.removeEventListener('change', notify)
+    },
+    () => window.matchMedia(query).matches,
+  )
+}
 
-const inboxPath = (inbox: Inbox) => `/inboxes/${inbox.id}`
-
-async function getJSON<T>(path: string, onSessionEnd: () => void): Promise<T> {
-  const response = await fetch(path)
-  if (response.status === 401) onSessionEnd()
-  if (!response.ok) throw new Error(response.statusText)
-  return response.json()
+function useLastDefined<T>(value: T | undefined) {
+  const last = useRef(value)
+  if (value !== undefined) last.current = value
+  return value ?? last.current
 }
 
 export function Shell({ session, onSessionChange }: { session: Session; onSessionChange: () => Promise<void> }) {
   const path = usePath().replace(/\/+$/, '') || '/'
+  const [, inboxId, messageId] = route.exec(path) ?? []
   const [inboxes, setInboxes] = useState<Inbox[]>()
   const [failed, setFailed] = useState(false)
+  const wide = useMediaQuery('(min-width: 768px)')
 
   useEffect(() => {
     getJSON<{ inboxes: Inbox[] }>('/api/inboxes', onSessionChange).then(
@@ -32,24 +42,27 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
       },
       () => setFailed(true),
     )
-  }, [path])
+  }, [inboxId])
 
   useEffect(() => {
-    if (path === '/' && inboxes?.[0]) navigate(inboxPath(inboxes[0]), 'replace')
+    if (path === '/' && inboxes?.[0]) navigate(inboxPath(inboxes[0].id), 'replace')
   }, [path, inboxes])
 
-  const selected = inboxes?.find((inbox) => inboxPath(inbox) === path)
+  const selected = inboxes?.find((inbox) => inbox.id === inboxId)
+  const open = selected !== undefined && messageId !== undefined
+  const shown = useLastDefined(open ? messageId : undefined)
+  const staged = wide ? (open ? messageId : undefined) : shown
   const signOut = () => fetch('/api/session', { method: 'DELETE' }).then(onSessionChange, onSessionChange)
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="relative flex h-full overflow-hidden">
       <nav aria-label={t.inboxes} className="flex w-rail shrink-0 flex-col border-r border-line max-lg:hidden">
         <div className="flex h-bar shrink-0 items-center pl-gutter font-semibold">{t.inboxes}</div>
         <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
           {inboxes?.map((inbox) => (
             <li key={inbox.id}>
               <a
-                {...link(inboxPath(inbox))}
+                {...link(inboxPath(inbox.id))}
                 aria-current={inbox.id === selected?.id ? 'page' : undefined}
                 className={cn(pressable, 'flex h-8 items-center gap-2 px-2 font-medium aria-[current=page]:bg-selected aria-[current=page]:text-fg')}
               >
@@ -62,9 +75,9 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
         <Account session={session} onSignOut={signOut} className="shrink-0 border-t border-line py-1.5 pr-2 pl-gutter" />
       </nav>
 
-      <section aria-label={t.messages} className="flex w-full min-w-0 flex-col md:w-list md:shrink-0">
+      <section aria-label={t.messages} inert={!wide && open} className="flex w-full min-w-0 flex-col md:w-list md:shrink-0">
         <div className="flex min-h-0 flex-1 flex-col">
-          {selected && <MessageList key={selected.id} inbox={selected} onSessionEnd={onSessionChange} />}
+          {selected && <MessageList key={selected.id} inbox={selected} openId={messageId} onSessionEnd={onSessionChange} />}
           {failed && !inboxes && (
             <p role="alert" className="p-gutter">
               {t.failed}
@@ -74,7 +87,7 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
             <div className="flex flex-col items-start gap-2 p-gutter">
               <p className="font-medium">{t.inboxMissing}</p>
               {inboxes[0] && (
-                <a {...link(inboxPath(inboxes[0]))} className="font-medium text-accent underline-offset-4 hover:underline max-md:py-3">
+                <a {...link(inboxPath(inboxes[0].id))} className={textLink}>
                   {t.goToInbox(inboxes[0].name)}
                 </a>
               )}
@@ -89,8 +102,23 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
         </footer>
       </section>
 
-      <main className="my-2 mr-2 grid min-w-0 flex-1 place-items-center rounded-xl border border-line bg-surface-sunken max-md:hidden">
-        <Mark decorative className="size-10 text-fg-disabled" />
+      <div
+        aria-hidden
+        data-open={open}
+        className="pointer-events-none absolute inset-0 bg-scrim opacity-0 transition-opacity duration-(--duration-base) ease-out data-[open=true]:opacity-100 md:hidden"
+      />
+      <main
+        data-open={open}
+        inert={!wide && !open}
+        className="relative flex min-w-0 flex-1 overflow-hidden bg-surface-sunken max-md:absolute max-md:inset-x-0 max-md:top-2 max-md:bottom-0 max-md:z-10 max-md:translate-y-full max-md:rounded-t-xl max-md:shadow-sheet max-md:transition-transform max-md:duration-(--duration-base) max-md:ease-out max-md:data-[open=true]:translate-y-0 max-md:data-[open=true]:duration-(--duration-slow) md:my-2 md:mr-2 md:rounded-xl md:border md:border-line"
+      >
+        {selected && staged ? (
+          <Stage key={staged} inbox={selected} messageId={staged} onSessionEnd={onSessionChange} />
+        ) : (
+          <div className="grid flex-1 place-items-center">
+            <Mark decorative className="size-10 text-fg-disabled" />
+          </div>
+        )}
       </main>
     </div>
   )
@@ -119,15 +147,7 @@ function ThemeToggle() {
   )
 }
 
-function useMinuteTick() {
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const timer = setInterval(() => setTick((tick) => tick + 1), 60_000)
-    return () => clearInterval(timer)
-  }, [])
-}
-
-function MessageList({ inbox, onSessionEnd }: { inbox: Inbox; onSessionEnd: () => void }) {
+function MessageList({ inbox, openId, onSessionEnd }: { inbox: Inbox; openId?: string; onSessionEnd: () => void }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [next, setNext] = useState('')
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading')
@@ -178,7 +198,7 @@ function MessageList({ inbox, onSessionEnd }: { inbox: Inbox; onSessionEnd: () =
             <Eyebrow className="px-3 pt-3 pb-1.5">{day}</Eyebrow>
             <ul className="flex flex-col gap-0.5">
               {received.map((message) => (
-                <Row key={message.id} message={message} />
+                <Row key={message.id} message={message} path={messagePath(inbox.id, message.id)} selected={message.id === openId} />
               ))}
             </ul>
           </section>
@@ -207,28 +227,25 @@ function groupByDay(messages: Message[]) {
   return [...days]
 }
 
-const named = /^(.*) <([^<>]+)>$/
-
-function senderLabel(sender: string) {
-  const name = named.exec(sender)?.[1]
-  return name && !/[<@]/.test(name) ? name : sender
-}
-
-const addressOf = (recipient: string) => named.exec(recipient)?.[2] ?? recipient
-
-function Row({ message }: { message: Message }) {
+function Row({ message, path, selected }: { message: Message; path: string; selected: boolean }) {
   return (
-    <li className="flex min-h-row flex-col justify-center gap-0.5 px-3 py-2.5">
-      <span className="flex items-baseline gap-2">
-        <span className={cn('truncate font-medium', !message.subject && 'text-fg-muted')}>{message.subject || t.noSubject}</span>
-        <time dateTime={message.receivedAt} className="ml-auto shrink-0 text-caption text-fg-subtle tabular-nums">
-          {relativeTime(new Date(message.receivedAt))}
-        </time>
-      </span>
-      <span className="truncate text-label text-fg-muted">
-        {senderLabel(message.sender)} → {addressOf(message.recipients[0] ?? '')}
-      </span>
-      <span className="truncate text-label text-fg-subtle">{message.preview}</span>
+    <li>
+      <a
+        {...link(path)}
+        aria-current={selected ? 'true' : undefined}
+        className="flex min-h-row flex-col justify-center gap-0.5 rounded-md px-3 py-2.5 transition-[background-color] duration-(--duration-fast) ease-out hover:bg-hover aria-[current=true]:bg-selected"
+      >
+        <span className="flex items-baseline gap-2">
+          <span className={cn('truncate font-medium', !message.subject && 'text-fg-muted')}>{message.subject || t.noSubject}</span>
+          <time dateTime={message.receivedAt} className="ml-auto shrink-0 text-caption text-fg-subtle tabular-nums">
+            {relativeTime(new Date(message.receivedAt))}
+          </time>
+        </span>
+        <span className="truncate text-label text-fg-muted">
+          {fromTo(message)}
+        </span>
+        <span className="truncate text-label text-fg-subtle">{message.preview}</span>
+      </a>
     </li>
   )
 }

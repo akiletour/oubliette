@@ -7,6 +7,8 @@ export const icon = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as cons
 export const pressable =
   'rounded-md text-fg-muted transition-[color,background-color,scale] duration-(--duration-fast) ease-out hover:bg-hover hover:text-fg active:scale-[0.96] disabled:pointer-events-none disabled:text-fg-disabled'
 
+export const textLink = 'font-medium text-accent underline-offset-4 hover:underline max-md:py-3'
+
 export function Mark({ decorative, className }: { decorative?: boolean; className?: string }) {
   return (
     <svg

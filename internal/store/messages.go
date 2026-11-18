@@ -36,6 +36,7 @@ type Message struct {
 	Sender             string    `json:"sender"`
 	Recipients         []string  `json:"recipients"`
 	Size               int       `json:"size"`
+	Raw                []byte    `json:"-"`
 }
 
 func newID() string {
@@ -102,14 +103,43 @@ func encodeList(list []string) string {
 	return string(encoded)
 }
 
-func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message, raw []byte) error {
+func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages
 			(id, inbox_id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size, raw)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newID(), inboxID, message.ReceivedAt.UnixMicro(), message.EnvelopeSender, encodeList(message.EnvelopeRecipients),
-		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(raw), raw)
+		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(message.Raw), message.Raw)
 	return err
+}
+
+const messageColumns = "id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size"
+
+func scanMessage(row interface{ Scan(...any) error }, more ...any) (Message, error) {
+	var message Message
+	var receivedAt int64
+	var envelopeRecipients, recipients string
+	columns := []any{&message.ID, &receivedAt, &message.EnvelopeSender, &envelopeRecipients,
+		&message.Subject, &message.Preview, &message.Sender, &recipients, &message.Size}
+	if err := row.Scan(append(columns, more...)...); err != nil {
+		return Message{}, err
+	}
+	message.ReceivedAt = time.UnixMicro(receivedAt).UTC()
+	return message, errors.Join(
+		json.Unmarshal([]byte(envelopeRecipients), &message.EnvelopeRecipients),
+		json.Unmarshal([]byte(recipients), &message.Recipients),
+	)
+}
+
+func (s *Store) Message(ctx context.Context, inboxID, id string) (Message, bool, error) {
+	var raw []byte
+	message, err := scanMessage(s.db.QueryRowContext(ctx,
+		"SELECT "+messageColumns+", raw FROM messages WHERE inbox_id = ? AND id = ?", inboxID, id), &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, false, nil
+	}
+	message.Raw = raw
+	return message, err == nil, err
 }
 
 func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Message, next string, err error) {
@@ -124,8 +154,7 @@ func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Me
 		beforeID = id
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size
-		FROM messages
+		"SELECT "+messageColumns+` FROM messages
 		WHERE inbox_id = ?1 AND (?2 = '' OR (received_at, id) < (?3, ?4))
 		ORDER BY received_at DESC, id DESC
 		LIMIT ?5`, inboxID, before, beforeTime, beforeID, pageSize+1)
@@ -135,18 +164,8 @@ func (s *Store) Messages(ctx context.Context, inboxID, before string) (page []Me
 	defer rows.Close()
 	page = []Message{}
 	for rows.Next() {
-		var message Message
-		var receivedAt int64
-		var envelopeRecipients, recipients string
-		if err := rows.Scan(&message.ID, &receivedAt, &message.EnvelopeSender, &envelopeRecipients,
-			&message.Subject, &message.Preview, &message.Sender, &recipients, &message.Size); err != nil {
-			return nil, "", err
-		}
-		message.ReceivedAt = time.UnixMicro(receivedAt).UTC()
-		if err := errors.Join(
-			json.Unmarshal([]byte(envelopeRecipients), &message.EnvelopeRecipients),
-			json.Unmarshal([]byte(recipients), &message.Recipients),
-		); err != nil {
+		message, err := scanMessage(rows)
+		if err != nil {
 			return nil, "", err
 		}
 		page = append(page, message)

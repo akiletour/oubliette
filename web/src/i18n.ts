@@ -21,6 +21,14 @@ const en = {
   olderMessages: 'Show older messages',
   inboxMissing: 'This inbox does not exist.',
   goToInbox: (name: string) => `Go to ${name}`,
+  closeMessage: 'Close the message',
+  messageViews: 'Message views',
+  rendered: 'Rendered',
+  text: 'Text',
+  renderingOf: (subject: string) => `Rendering of “${subject}”`,
+  noTextVersion: 'This message has no text version.',
+  messageMissing: 'This message does not exist.',
+  messageFailed: 'The message could not be loaded.',
 }
 
 const fr: typeof en = {
@@ -46,6 +54,14 @@ const fr: typeof en = {
   olderMessages: 'Afficher les messages plus anciens',
   inboxMissing: 'Cette boîte n’existe pas.',
   goToInbox: (name: string) => `Aller à ${name}`,
+  closeMessage: 'Fermer le message',
+  messageViews: 'Vues du message',
+  rendered: 'Rendu',
+  text: 'Texte',
+  renderingOf: (subject: string) => `Rendu de « ${subject} »`,
+  noTextVersion: 'Ce message n’a pas de version texte.',
+  messageMissing: 'Ce message n’existe pas.',
+  messageFailed: 'Le message n’a pas pu être chargé.',
 }
 
 const catalogs = { en, fr }

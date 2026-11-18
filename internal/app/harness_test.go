@@ -197,7 +197,14 @@ type messageList struct {
 	Next     string
 }
 
-func (b *browser) MessagePage(before string) messageList {
+func (i *instance) Capture(data string) {
+	i.t.Helper()
+	if err := i.Submit(plain(i.LoggedCredentials()[0]), "app@staging.example", []string{"a@example.com"}, data); err != nil {
+		i.t.Fatalf("submit: %v", err)
+	}
+}
+
+func (b *browser) InboxID() string {
 	t := b.i.t
 	t.Helper()
 	var inboxes inboxList
@@ -205,9 +212,29 @@ func (b *browser) MessagePage(before string) messageList {
 	if len(inboxes.Inboxes) != 1 {
 		t.Fatalf("got %d Inboxes, want 1", len(inboxes.Inboxes))
 	}
+	return inboxes.Inboxes[0].ID
+}
+
+func (b *browser) MessagePage(before string) messageList {
+	b.i.t.Helper()
 	var page messageList
-	b.Get("/api/inboxes/"+inboxes.Inboxes[0].ID+"/messages?before="+before).JSON(t, &page)
+	b.Get("/api/inboxes/"+b.InboxID()+"/messages?before="+before).JSON(b.i.t, &page)
 	return page
+}
+
+func (b *browser) MessagePath(id string) string {
+	b.i.t.Helper()
+	return "/api/inboxes/" + b.InboxID() + "/messages/" + id
+}
+
+func (b *browser) Rendered() string {
+	t := b.i.t
+	t.Helper()
+	rendered := b.Get(b.MessagePath(b.Messages()[0].ID) + "/rendered")
+	if rendered.Status != http.StatusOK {
+		t.Fatalf("rendered Message = %d %s, want 200", rendered.Status, rendered.Body)
+	}
+	return rendered.Body
 }
 
 func (b *browser) Messages() []message {

@@ -43,6 +43,8 @@
   --spacing-rail: 14.5rem;
   --spacing-gutter: 1.25rem;
 
+  --container-reading: 72ch;
+
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
