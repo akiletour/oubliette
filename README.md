@@ -1,4 +1,6 @@
-# Oubliette
+<img src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/logo.svg" width="72" height="72" alt="">
+
+# Oubliette · self-hosted email sandbox for staging sites
 
 An oubliette is a dungeon you drop into through a trapdoor in the ceiling, and nobody comes back out. This one is for email. Your staging sites send their mail to it over SMTP, it keeps every Message, and none of them ever reaches a real person.
 
@@ -7,7 +9,7 @@ An oubliette is a dungeon you drop into through a trapdoor in the ceiling, and n
   <img alt="The Oubliette interface: the Inbox list on the left, the Messages of the Harbour Bakery staging Inbox in the middle, and an order confirmation email rendered on the right." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/main-light.webp">
 </picture>
 
-Each staging Application gets its own Inbox, chosen by the Credentials it signs in with. The agency's Members see every Inbox. A customer gets a Share Link to their own Inbox and reads their emails without an account, so nobody has to forward screenshots any more.
+Mailpit and similar SMTP testing tools catch every staging email in one shared mailbox. Oubliette gives each Application its own Inbox, chosen by the Credentials it signs in with. The agency's Members see every Inbox. A customer gets a Share Link to their own Inbox and reads their emails without an account, so nobody has to forward screenshots any more.
 
 It ships as one binary with the interface built in, and keeps everything in one SQLite file.
 
