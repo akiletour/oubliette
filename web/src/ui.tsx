@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
-import { CircleAlert, Moon, Search, Sun, X } from 'lucide-react'
+import { Check, CircleAlert, Copy, Moon, Search, Sun, X } from 'lucide-react'
 import { t } from './i18n'
 import { RequestFailed } from './messages'
 import { setTheme, useTheme } from './theme'
@@ -63,6 +63,24 @@ export function IconButton({
   )
 }
 
+export function CopyButton({ label, text }: { label: string; text: string }) {
+  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copyText = () =>
+    Promise.resolve()
+      .then(() => navigator.clipboard.writeText(text))
+      .then(
+        () => setCopy('copied'),
+        () => setCopy('failed'),
+      )
+  return (
+    <IconButton label={copy === 'failed' ? t.copyFailed : label} onClick={copyText}>
+      {copy === 'copied' && <Check {...icon} />}
+      {copy === 'failed' && <CircleAlert {...icon} />}
+      {copy === 'idle' && <Copy {...icon} />}
+    </IconButton>
+  )
+}
+
 export function Dialog({
   title,
   wide,
@@ -83,7 +101,7 @@ export function Dialog({
       onClose={onClose}
       onClick={(event) => event.target === event.currentTarget && event.currentTarget.close()}
       className={cn(
-        'mx-gutter my-auto max-w-none rounded-xl border border-line bg-surface-raised text-fg shadow-sheet transition-[opacity,translate] duration-(--duration-slow) ease-out backdrop:bg-scrim starting:translate-y-2 starting:opacity-0 md:mx-auto',
+        'mx-gutter my-auto max-w-[calc(100vw-2*var(--spacing-gutter))] rounded-xl border border-line bg-surface-raised text-fg shadow-sheet transition-[opacity,translate] duration-(--duration-slow) ease-out backdrop:bg-scrim starting:translate-y-2 starting:opacity-0 md:mx-auto',
         wide ? 'md:w-xl' : 'md:w-96',
       )}
     >

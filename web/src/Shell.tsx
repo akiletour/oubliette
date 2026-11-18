@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react'
-import { ChevronsUpDown, Eraser, Link2, LogOut, Pencil, Trash2 } from 'lucide-react'
+import { ChevronsUpDown, Eraser, Link2, LogOut, Pencil, Plug, Trash2 } from 'lucide-react'
 import type { Session } from './App'
 import { t } from './i18n'
 import { DeleteInboxDialog, EmptyInboxDialog, InboxNameDialog, InboxNav, SwitchInboxDialog } from './Inboxes'
-import { RequestFailed, getJSON, inboxPath, messageAt, request, type Inbox, type ShareLink } from './messages'
+import { InboxPanel, type PanelTab } from './InboxPanel'
+import { RequestFailed, getJSON, inboxPath, messageAt, request, type Credentials, type Inbox, type ShareLink } from './messages'
 import { link, navigate, usePath } from './router'
-import { SharingDialog } from './Sharing'
 import { IconButton, ThemeToggle, cn, icon, primaryButton, textLink } from './ui'
 import { MessageList, Workspace, type Place } from './Workspace'
 
 const route = /^\/inboxes\/([^/]+)(?:\/messages\/([^/]+))?$/
 
-type InboxDialog = 'create' | 'rename' | 'empty' | 'delete' | 'switch' | 'share'
+type InboxDialog = 'create' | 'rename' | 'empty' | 'delete' | 'switch' | PanelTab
 
 const placeOf = (inbox: Inbox): Place => ({
   key: inbox.id,
@@ -90,6 +90,11 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
     revoke: (link: string) => request('DELETE', `/api/inboxes/${id}/share-links/${link}`, undefined, onSessionChange),
   })
 
+  const integrationOf = (id: string) => ({
+    show: () => getJSON<Credentials>(`/api/inboxes/${id}/credentials`, onSessionChange),
+    regenerate: async (): Promise<Credentials> => (await request('POST', `/api/inboxes/${id}/credentials`, undefined, onSessionChange)).json(),
+  })
+
   return (
     <div className="relative flex h-full overflow-hidden">
       <nav aria-label={t.inboxes} className="flex w-rail shrink-0 flex-col border-r border-line max-lg:hidden">
@@ -120,17 +125,22 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
             onLiveChange={loadInboxes}
             emptyHint={t.emptyInboxHint}
             nameAction={
-              <IconButton label={t.switchInbox} onClick={() => setDialog('switch')} className="-ml-1 lg:hidden">
-                <ChevronsUpDown {...icon} />
-              </IconButton>
+              <>
+                <IconButton label={t.switchInbox} onClick={() => setDialog('switch')} className="-ml-1 lg:hidden">
+                  <ChevronsUpDown {...icon} />
+                </IconButton>
+                <IconButton label={t.renameInbox} onClick={() => setDialog('rename')} className="-ml-1 shrink-0">
+                  <Pencil {...icon} />
+                </IconButton>
+              </>
             }
             actions={
               <>
-                <IconButton label={t.shareInbox} onClick={() => setDialog('share')}>
+                <IconButton label={t.shareInbox} onClick={() => setDialog('sharing')}>
                   <Link2 {...icon} />
                 </IconButton>
-                <IconButton label={t.renameInbox} onClick={() => setDialog('rename')}>
-                  <Pencil {...icon} />
+                <IconButton label={t.smtpIntegration} onClick={() => setDialog('integration')}>
+                  <Plug {...icon} />
                 </IconButton>
                 <IconButton label={t.emptyTheInbox} onClick={() => setDialog('empty')} disabled={place.messageCount === 0}>
                   <Eraser {...icon} />
@@ -184,8 +194,14 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
       {dialog === 'delete' && selected && (
         <DeleteInboxDialog inbox={selected} onDelete={() => deleteInbox(selected.id)} onClose={closeDialog('delete')} />
       )}
-      {dialog === 'share' && selected && (
-        <SharingDialog inbox={selected} sharing={sharingOf(selected.id)} onClose={closeDialog('share')} />
+      {(dialog === 'integration' || dialog === 'sharing') && selected && (
+        <InboxPanel
+          inbox={selected}
+          tab={dialog}
+          sharing={sharingOf(selected.id)}
+          integration={integrationOf(selected.id)}
+          onClose={closeDialog(dialog)}
+        />
       )}
       {dialog === 'switch' && inboxes && (
         <SwitchInboxDialog inboxes={inboxes} selectedId={selected?.id} onCreate={() => setDialog('create')} onClose={closeDialog('switch')} />

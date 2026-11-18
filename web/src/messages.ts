@@ -14,6 +14,8 @@ export type OpenedMessage = Message & {
   attachments: Array<{ name: string; type: string; size: number }>
 }
 
+export type Credentials = { smtpHost: string; smtpPort: number; smtpUsername: string; smtpPassword: string }
+
 export type ShareLink = { id: string; label: string; token: string; createdAt: string; expiresAt: string | null; lastOpenedAt: string | null; expired: boolean }
 
 export const inboxPath = (inboxId: string) => `/inboxes/${inboxId}`

@@ -53,23 +53,30 @@ func (l *logs) String() string {
 }
 
 type instance struct {
-	t        *testing.T
-	Data     string
-	Clock    *clock
-	URL      string
-	SMTPAddr string
-	logs     *logs
-	server   *app.Server
+	t         *testing.T
+	Data      string
+	Clock     *clock
+	URL       string
+	SMTPAddr  string
+	logs      *logs
+	server    *app.Server
+	configure func(*app.Config)
 }
 
 func start(t *testing.T) *instance {
 	t.Helper()
+	return startWith(t, func(*app.Config) {})
+}
+
+func startWith(t *testing.T, configure func(*app.Config)) *instance {
+	t.Helper()
 	t.Parallel()
 	i := &instance{
-		t:     t,
-		Data:  filepath.Join(t.TempDir(), "oubliette.db"),
-		Clock: &clock{now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)},
-		logs:  &logs{},
+		t:         t,
+		Data:      filepath.Join(t.TempDir(), "oubliette.db"),
+		Clock:     &clock{now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)},
+		logs:      &logs{},
+		configure: configure,
 	}
 	i.boot()
 	t.Cleanup(i.stop)
@@ -78,14 +85,16 @@ func start(t *testing.T) *instance {
 
 func (i *instance) boot() {
 	i.t.Helper()
-	server, err := app.Start(app.Config{
+	cfg := app.Config{
 		DataFile:     i.Data,
 		HTTPAddr:     "127.0.0.1:0",
 		SMTPAddr:     "127.0.0.1:0",
 		InsecureAuth: true,
 		Now:          i.Clock.Now,
 		Log:          slog.New(slog.NewJSONHandler(i.logs, nil)),
-	})
+	}
+	i.configure(&cfg)
+	server, err := app.Start(cfg)
 	if err != nil {
 		i.t.Fatalf("start server: %v", err)
 	}

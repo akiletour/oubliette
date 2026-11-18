@@ -1,12 +1,16 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/emersion/go-smtp"
 
@@ -20,12 +24,14 @@ import (
 const smtpDrain = 2 * time.Second
 
 type Config struct {
-	DataFile     string
-	HTTPAddr     string
-	SMTPAddr     string
-	InsecureAuth bool
-	Now          func() time.Time
-	Log          *slog.Logger
+	DataFile           string
+	HTTPAddr           string
+	SMTPAddr           string
+	InsecureAuth       bool
+	SMTPAdvertisedHost string
+	SMTPAdvertisedPort string
+	Now                func() time.Time
+	Log                *slog.Logger
 }
 
 type Server struct {
@@ -40,6 +46,10 @@ func Start(cfg Config) (*Server, error) {
 	if !cfg.InsecureAuth {
 		return nil, errors.New("SMTP encryption is not available yet, so Credentials would travel unencrypted: " +
 			"start with --smtp-insecure-auth (OUBLIETTE_SMTP_INSECURE_AUTH=true) to accept that on a private network")
+	}
+	advertised, err := advertisedSMTP(cfg)
+	if err != nil {
+		return nil, err
 	}
 	storage, err := store.Open(cfg.DataFile)
 	if err != nil {
@@ -60,12 +70,13 @@ func Start(cfg Config) (*Server, error) {
 		storage.Close()
 		return nil, err
 	}
+	smtpPort := smtpListener.Addr().(*net.TCPAddr).Port
 	hub := live.NewHub()
 	streaming, endStreams := context.WithCancel(context.Background())
 	server := &Server{
 		store: storage,
 		http: &http.Server{
-			Handler:           httpapi.New(storage, hub, web.Dist(), cfg.Now, cfg.Log),
+			Handler:           httpapi.New(storage, hub, httpapi.SMTPEndpoint{Host: advertised.Host, Port: cmp.Or(advertised.Port, smtpPort)}, web.Dist(), cfg.Now, cfg.Log),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(cfg.Log.Handler(), slog.LevelError),
 			BaseContext:       func(net.Listener) context.Context { return streaming },
@@ -87,6 +98,27 @@ func Start(cfg Config) (*Server, error) {
 	}()
 	cfg.Log.Info("listening", "http", server.httpAddr, "smtp", server.smtpAddr, "data", cfg.DataFile)
 	return server, nil
+}
+
+func advertisedSMTP(cfg Config) (httpapi.SMTPEndpoint, error) {
+	host := cfg.SMTPAdvertisedHost
+	if host != "" && net.ParseIP(host) == nil && strings.IndexFunc(host, notInHostname) >= 0 {
+		return httpapi.SMTPEndpoint{}, errors.New("the advertised SMTP host must be a host name or an IP address, without scheme or port: " +
+			"check --smtp-advertised-host (OUBLIETTE_SMTP_ADVERTISED_HOST)")
+	}
+	if cfg.SMTPAdvertisedPort == "" {
+		return httpapi.SMTPEndpoint{Host: host}, nil
+	}
+	port, err := strconv.ParseUint(cfg.SMTPAdvertisedPort, 10, 16)
+	if err != nil || port == 0 {
+		return httpapi.SMTPEndpoint{}, errors.New("the advertised SMTP port must be a number from 1 to 65535: " +
+			"check --smtp-advertised-port (OUBLIETTE_SMTP_ADVERTISED_PORT)")
+	}
+	return httpapi.SMTPEndpoint{Host: host, Port: int(port)}, nil
+}
+
+func notInHostname(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '-'
 }
 
 func createFirstInbox(storage *store.Store, cfg Config) error {

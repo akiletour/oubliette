@@ -25,6 +25,7 @@ import (
 const (
 	pageSize        = 50
 	maxName         = 100
+	usernameLength  = 16
 	zeroWidthJoiner = '‍'
 )
 
@@ -81,6 +82,10 @@ func inboxName(name string) (string, error) {
 	return name, nil
 }
 
+func newUsername() string {
+	return newID()[:usernameLength]
+}
+
 func createInbox(ctx context.Context, db interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, name string, now time.Time) (Inbox, error) {
@@ -88,7 +93,7 @@ func createInbox(ctx context.Context, db interface {
 	if err != nil {
 		return Inbox{}, err
 	}
-	inbox := Inbox{ID: newID(), Name: name, Username: newID()[:16], Password: rand.Text()}
+	inbox := Inbox{ID: newID(), Name: name, Username: newUsername(), Password: rand.Text()}
 	_, err = db.ExecContext(ctx,
 		"INSERT INTO inboxes (id, name, smtp_username, smtp_password, created_at) VALUES (?, ?, ?, ?, ?)",
 		inbox.ID, inbox.Name, inbox.Username, inbox.Password, now.UnixMilli())
@@ -128,6 +133,13 @@ func (s *Store) RenameInbox(ctx context.Context, id, name string) error {
 	return whenNoRow(result, err, ErrInboxUnknown)
 }
 
+func (s *Store) RegenerateCredentials(ctx context.Context, id string) (Inbox, error) {
+	inbox := Inbox{ID: id, Username: newUsername(), Password: rand.Text()}
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE inboxes SET smtp_username = ?, smtp_password = ? WHERE id = ?", inbox.Username, inbox.Password, id)
+	return inbox, whenNoRow(result, err, ErrInboxUnknown)
+}
+
 func (s *Store) DeleteInbox(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM inboxes WHERE id = ?", id)
 	return whenNoRow(result, err, ErrInboxUnknown)
@@ -155,7 +167,8 @@ func (s *Store) Inboxes(ctx context.Context) ([]Inbox, error) {
 
 func (s *Store) Inbox(ctx context.Context, id string) (Inbox, bool, error) {
 	inbox := Inbox{ID: id}
-	err := s.db.QueryRowContext(ctx, "SELECT name FROM inboxes WHERE id = ?", id).Scan(&inbox.Name)
+	err := s.db.QueryRowContext(ctx,
+		"SELECT name, smtp_username, smtp_password FROM inboxes WHERE id = ?", id).Scan(&inbox.Name, &inbox.Username, &inbox.Password)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Inbox{}, false, nil
 	}

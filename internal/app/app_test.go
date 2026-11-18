@@ -233,6 +233,8 @@ func TestAPIRefusesRequestsWithoutAValidSession(t *testing.T) {
 		{http.MethodGet, "/api/inboxes/any/messages/any/rendered"},
 		{http.MethodDelete, "/api/inboxes/any/messages/any"},
 		{http.MethodDelete, "/api/inboxes/any/messages"},
+		{http.MethodGet, "/api/inboxes/any/credentials"},
+		{http.MethodPost, "/api/inboxes/any/credentials"},
 	} {
 		if anonymous := i.Browser().Do(request.method, request.path, ""); anonymous.Status != http.StatusUnauthorized {
 			t.Errorf("%s %s without a session = %d, want 401", request.method, request.path, anonymous.Status)

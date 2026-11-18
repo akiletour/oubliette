@@ -30,16 +30,22 @@ const (
 		"img-src * data:; style-src * 'unsafe-inline'; font-src * data:"
 )
 
+type SMTPEndpoint struct {
+	Host string
+	Port int
+}
+
 type api struct {
 	store    *store.Store
+	smtp     SMTPEndpoint
 	hub      *live.Hub
 	now      func() time.Time
 	log      *slog.Logger
 	throttle throttle
 }
 
-func New(storage *store.Store, hub *live.Hub, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
-	a := &api{store: storage, hub: hub, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
+func New(storage *store.Store, hub *live.Hub, advertised SMTPEndpoint, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
+	a := &api{store: storage, smtp: advertised, hub: hub, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +67,8 @@ func New(storage *store.Store, hub *live.Hub, ui fs.FS, now func() time.Time, lo
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/raw", a.member(a.showRaw))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/attachments/{attachment}", a.member(a.downloadAttachment))
+	mux.Handle("GET /api/inboxes/{inbox}/credentials", a.member(a.showCredentials))
+	mux.Handle("POST /api/inboxes/{inbox}/credentials", a.member(a.regenerateCredentials))
 	mux.Handle("POST /api/inboxes/{inbox}/share-links", a.member(a.createShareLink))
 	mux.Handle("GET /api/inboxes/{inbox}/share-links", a.member(a.listShareLinks))
 	mux.Handle("DELETE /api/inboxes/{inbox}/share-links/{link}", a.member(a.revokeShareLink))
@@ -241,6 +249,29 @@ func (a *api) emptyInbox(w http.ResponseWriter, r *http.Request) {
 		a.hub.Emptied(inbox.ID)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func (a *api) showCredentials(w http.ResponseWriter, r *http.Request) {
+	inbox, found := a.inboxInScope(w, r)
+	if found {
+		a.writeCredentials(w, inbox)
+	}
+}
+
+func (a *api) regenerateCredentials(w http.ResponseWriter, r *http.Request) {
+	inbox, err := a.store.RegenerateCredentials(r.Context(), r.PathValue("inbox"))
+	if !a.refused(w, r, err) {
+		a.writeCredentials(w, inbox)
+	}
+}
+
+func (a *api) writeCredentials(w http.ResponseWriter, inbox store.Inbox) {
+	writeJSON(w, http.StatusOK, struct {
+		SMTPHost     string `json:"smtpHost"`
+		SMTPPort     int    `json:"smtpPort"`
+		SMTPUsername string `json:"smtpUsername"`
+		SMTPPassword string `json:"smtpPassword"`
+	}{a.smtp.Host, a.smtp.Port, inbox.Username, inbox.Password})
 }
 
 func (a *api) createShareLink(w http.ResponseWriter, r *http.Request) {

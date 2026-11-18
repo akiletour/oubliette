@@ -49,6 +49,10 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	insecureAuthFromEnv, _ := strconv.ParseBool(getenv("OUBLIETTE_SMTP_INSECURE_AUTH"))
 	insecureAuth := flags.Bool("smtp-insecure-auth", insecureAuthFromEnv,
 		"accept SMTP authentication without encryption (OUBLIETTE_SMTP_INSECURE_AUTH)")
+	advertisedHost := flags.String("smtp-advertised-host", getenv("OUBLIETTE_SMTP_ADVERTISED_HOST"),
+		"SMTP host shown to Members, the host of the page when empty (OUBLIETTE_SMTP_ADVERTISED_HOST)")
+	advertisedPort := flags.String("smtp-advertised-port", getenv("OUBLIETTE_SMTP_ADVERTISED_PORT"),
+		"SMTP port shown to Members, the listening port when empty (OUBLIETTE_SMTP_ADVERTISED_PORT)")
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -58,12 +62,14 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	switch args = flags.Args(); {
 	case len(args) == 1 && args[0] == "serve":
 		err = serve(ctx, Config{
-			DataFile:     *data,
-			HTTPAddr:     *httpAddr,
-			SMTPAddr:     *smtpAddr,
-			InsecureAuth: *insecureAuth,
-			Now:          time.Now,
-			Log:          slog.New(slog.NewTextHandler(stdout, nil)),
+			DataFile:           *data,
+			HTTPAddr:           *httpAddr,
+			SMTPAddr:           *smtpAddr,
+			InsecureAuth:       *insecureAuth,
+			SMTPAdvertisedHost: *advertisedHost,
+			SMTPAdvertisedPort: *advertisedPort,
+			Now:                time.Now,
+			Log:                slog.New(slog.NewTextHandler(stdout, nil)),
 		})
 	case len(args) > 1 && args[0] == "member":
 		err = member(ctx, *data, args[1], args[2:], stdin, stdout, stderr)
