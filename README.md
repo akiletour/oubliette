@@ -153,7 +153,7 @@ To restore, put the copy back as the data file while the server is stopped.
 make build
 ```
 
-This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 24. `docker build -t oubliette .` builds the image instead and needs only Docker. `make test` runs `go vet` and the tests, which drive a real server over real SMTP and HTTP.
+This builds the interface and produces `./oubliette`, a static binary built without CGO. It needs Go 1.27 and Node 26. `docker build -t oubliette .` builds the image instead and needs only Docker. `make test` runs `go vet` and the tests, which drive a real server over real SMTP and HTTP.
 
 ## What it won't do
 
