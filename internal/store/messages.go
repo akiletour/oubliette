@@ -124,6 +124,21 @@ func (s *Store) CreateFirstInbox(ctx context.Context, name string, now time.Time
 	return inbox, true, tx.Commit()
 }
 
+func (s *Store) EnsureInbox(ctx context.Context, name string, now time.Time) (Inbox, bool, error) {
+	name, err := inboxName(name)
+	if err != nil {
+		return Inbox{}, false, err
+	}
+	inbox := Inbox{Name: name}
+	err = s.db.QueryRowContext(ctx,
+		"SELECT id, smtp_username, smtp_password FROM inboxes WHERE name = ? COLLATE NOCASE ORDER BY created_at, id LIMIT 1", name).Scan(&inbox.ID, &inbox.Username, &inbox.Password)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return inbox, false, err
+	}
+	inbox, err = createInbox(ctx, s.db, name, now)
+	return inbox, err == nil, err
+}
+
 func (s *Store) RenameInbox(ctx context.Context, id, name string) error {
 	name, err := inboxName(name)
 	if err != nil {

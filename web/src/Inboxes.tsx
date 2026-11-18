@@ -46,7 +46,8 @@ export function InboxNav({
                   'flex h-8 items-center gap-2 px-2 font-medium aria-[current=page]:bg-selected aria-[current=page]:text-fg max-lg:h-11',
                 )}
               >
-                <span className="truncate">{inbox.name}</span>
+                <span className="min-w-0 truncate">{inbox.name}</span>
+                {inbox.anonymous && <span className="shrink-0 text-label font-normal text-fg-subtle">{t.anonymous}</span>}
                 <span className="ml-auto text-label font-normal text-fg-subtle tabular-nums">{inbox.messageCount}</span>
               </a>
             </li>

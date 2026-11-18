@@ -32,6 +32,7 @@ type Rules struct {
 	InsecureAuth    bool
 	MaxMessageBytes int64
 	InboxCap        int
+	AnonymousInbox  string
 }
 
 type backend struct {
@@ -156,7 +157,7 @@ func (b *backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 type session struct {
 	backend            *backend
 	connection         *connection
-	inbox              *store.Inbox
+	authenticated      bool
 	username, password string
 	sender             string
 	recipients         []string
@@ -179,17 +180,33 @@ func (s *session) Auth(mechanism string) (sasl.Server, error) {
 }
 
 func (s *session) authenticate(username, password string) error {
-	inbox, valid, err := s.backend.store.InboxByCredentials(context.Background(), username, password)
-	if err != nil {
-		s.backend.log.Error("authentication failed", "error", err)
-		return errUnavailable
+	s.authenticated, s.username, s.password = true, username, password
+	if _, err := s.resolveInbox(); err != nil {
+		s.authenticated = false
+		return err
 	}
-	if !valid {
-		s.inbox = nil
-		return smtp.ErrAuthFailed
-	}
-	s.inbox, s.username, s.password = &inbox, username, password
 	return nil
+}
+
+func (s *session) resolveInbox() (string, error) {
+	anonymous := s.backend.rules.AnonymousInbox
+	if !s.authenticated {
+		if anonymous == "" {
+			return "", errAuthRequired
+		}
+		return anonymous, nil
+	}
+	inbox, valid, err := s.backend.store.InboxByCredentials(context.Background(), s.username, s.password)
+	switch {
+	case err != nil:
+		s.backend.log.Error("resolving the Inbox of a Message failed", "error", err)
+		return "", errUnavailable
+	case valid:
+		return inbox.ID, nil
+	case anonymous != "":
+		return anonymous, nil
+	}
+	return "", smtp.ErrAuthFailed
 }
 
 type loginServer struct {
@@ -210,10 +227,7 @@ func (l *loginServer) Next(response []byte) ([]byte, bool, error) {
 }
 
 func (s *session) Mail(from string, _ *smtp.MailOptions) error {
-	if s.inbox == nil {
-		return errAuthRequired
-	}
-	if err := s.authenticate(s.username, s.password); err != nil {
+	if _, err := s.resolveInbox(); err != nil {
 		return err
 	}
 	if err := s.backend.begin(s.connection); err != nil {
@@ -229,7 +243,8 @@ func (s *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 }
 
 func (s *session) Data(r io.Reader) error {
-	if err := s.authenticate(s.username, s.password); err != nil {
+	inboxID, err := s.resolveInbox()
+	if err != nil {
 		return err
 	}
 	raw, err := io.ReadAll(r)
@@ -238,7 +253,7 @@ func (s *session) Data(r io.Reader) error {
 	}
 	headers, body, err := content.Split(raw)
 	if err != nil {
-		s.backend.log.Warn("the headers of a Message could not be read", "inbox", s.inbox.ID, "error", err)
+		s.backend.log.Warn("the headers of a Message could not be read", "inbox", inboxID, "error", err)
 	}
 	message := store.Message{
 		ReceivedAt:         s.backend.now(),
@@ -256,12 +271,12 @@ func (s *session) Data(r io.Reader) error {
 	if len(message.Recipients) == 0 {
 		message.Recipients = s.recipients
 	}
-	id, removed, err := s.backend.store.HoldMessage(context.Background(), s.inbox.ID, message, s.backend.rules.InboxCap)
+	id, removed, err := s.backend.store.HoldMessage(context.Background(), inboxID, message, s.backend.rules.InboxCap)
 	if err != nil {
-		s.backend.log.Error("holding a Message failed", "inbox", s.inbox.ID, "error", err)
+		s.backend.log.Error("holding a Message failed", "inbox", inboxID, "error", err)
 		return errUnavailable
 	}
-	s.backend.hub.Received(s.inbox.ID, id)
+	s.backend.hub.Received(inboxID, id)
 	for _, message := range removed {
 		s.backend.hub.Removed(message.InboxID, message.ID)
 	}

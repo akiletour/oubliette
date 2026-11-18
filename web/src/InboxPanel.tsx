@@ -116,6 +116,7 @@ function IntegrationTab({ integration }: { integration: Integration }) {
   return (
     <div className="flex flex-col gap-5 px-5 py-4">
       <p className="text-fg-muted">{t.integrationHint}</p>
+      {shown.anonymous && <p className="rounded-lg bg-accent-soft px-4 py-3">{t.anonymousIntegrationHint}</p>}
       <dl className="flex flex-col divide-y divide-line rounded-lg border border-line">
         {values.map(([label, value]) => (
           <div key={label} className="flex items-center gap-3 py-1 pr-1 pl-4">

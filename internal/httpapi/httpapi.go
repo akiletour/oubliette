@@ -36,16 +36,17 @@ type SMTPEndpoint struct {
 }
 
 type api struct {
-	store    *store.Store
-	smtp     SMTPEndpoint
-	hub      *live.Hub
-	now      func() time.Time
-	log      *slog.Logger
-	throttle throttle
+	store     *store.Store
+	smtp      SMTPEndpoint
+	anonymous string
+	hub       *live.Hub
+	now       func() time.Time
+	log       *slog.Logger
+	throttle  throttle
 }
 
-func New(storage *store.Store, hub *live.Hub, advertised SMTPEndpoint, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
-	a := &api{store: storage, smtp: advertised, hub: hub, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
+func New(storage *store.Store, hub *live.Hub, advertised SMTPEndpoint, anonymousInbox string, ui fs.FS, now func() time.Time, log *slog.Logger) http.Handler {
+	a := &api{store: storage, smtp: advertised, anonymous: anonymousInbox, hub: hub, now: now, log: log, throttle: throttle{streaks: map[[sha256.Size]byte]streak{}}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +178,15 @@ func (a *api) listInboxes(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"inboxes": inboxes})
+	type listedInbox struct {
+		store.Inbox
+		Anonymous bool `json:"anonymous,omitempty"`
+	}
+	listed := make([]listedInbox, 0, len(inboxes))
+	for _, inbox := range inboxes {
+		listed = append(listed, listedInbox{inbox, a.isAnonymous(inbox.ID)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inboxes": listed})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, into any) bool {
@@ -212,7 +221,23 @@ func (a *api) createInbox(w http.ResponseWriter, r *http.Request) {
 	}{inbox, inbox.Username, inbox.Password})
 }
 
+func (a *api) isAnonymous(inboxID string) bool {
+	return inboxID == a.anonymous
+}
+
+func (a *api) keepsAnonymousInbox(w http.ResponseWriter, r *http.Request) bool {
+	if !a.isAnonymous(r.PathValue("inbox")) {
+		return false
+	}
+	writeError(w, http.StatusConflict, "this is the Anonymous Inbox named by --smtp-anonymous-inbox (OUBLIETTE_SMTP_ANONYMOUS_INBOX): "+
+		"the Operator must change that setting before it can be renamed or deleted")
+	return true
+}
+
 func (a *api) renameInbox(w http.ResponseWriter, r *http.Request) {
+	if a.keepsAnonymousInbox(w, r) {
+		return
+	}
 	name, ok := readName(w, r)
 	if !ok {
 		return
@@ -223,6 +248,9 @@ func (a *api) renameInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) deleteInbox(w http.ResponseWriter, r *http.Request) {
+	if a.keepsAnonymousInbox(w, r) {
+		return
+	}
 	if !a.refused(w, r, a.store.DeleteInbox(r.Context(), r.PathValue("inbox"))) {
 		a.hub.ScopeChanged(r.PathValue("inbox"))
 		w.WriteHeader(http.StatusNoContent)
@@ -271,7 +299,8 @@ func (a *api) writeCredentials(w http.ResponseWriter, inbox store.Inbox) {
 		SMTPPort     int    `json:"smtpPort"`
 		SMTPUsername string `json:"smtpUsername"`
 		SMTPPassword string `json:"smtpPassword"`
-	}{a.smtp.Host, a.smtp.Port, inbox.Username, inbox.Password})
+		Anonymous    bool   `json:"anonymous"`
+	}{a.smtp.Host, a.smtp.Port, inbox.Username, inbox.Password, a.isAnonymous(inbox.ID)})
 }
 
 func (a *api) createShareLink(w http.ResponseWriter, r *http.Request) {

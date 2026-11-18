@@ -124,7 +124,7 @@ func TestRenamingAnInboxKeepsItsCredentialsAndMessages(t *testing.T) {
 	}
 	i.Capture(welcome)
 
-	if listed := member.Inboxes(); len(listed) != 1 || listed[0] != (listedInbox{inbox.ID, "Main shop", 2}) {
+	if listed := member.Inboxes(); len(listed) != 1 || listed[0] != (listedInbox{ID: inbox.ID, Name: "Main shop", MessageCount: 2}) {
 		t.Errorf("Inboxes after renaming = %+v, want Main shop with both Messages", listed)
 	}
 	if refused := member.Do(http.MethodPatch, "/api/inboxes/"+inbox.ID, named("")); refused.Status != http.StatusBadRequest {

@@ -59,6 +59,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		"SMTP host shown to Members, the host of the page when empty (OUBLIETTE_SMTP_ADVERTISED_HOST)")
 	advertisedPort := flags.String("smtp-advertised-port", getenv("OUBLIETTE_SMTP_ADVERTISED_PORT"),
 		"SMTP port shown to Members, the listening port when empty (OUBLIETTE_SMTP_ADVERTISED_PORT)")
+	anonymousInbox := flags.String("smtp-anonymous-inbox", getenv("OUBLIETTE_SMTP_ANONYMOUS_INBOX"),
+		"Inbox that holds Messages sent without valid Credentials, none when empty (OUBLIETTE_SMTP_ANONYMOUS_INBOX)")
 	limits := registerLimits(flags, getenv)
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
@@ -78,6 +80,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			SMTPKeyFile:        *tlsKey,
 			SMTPAdvertisedHost: *advertisedHost,
 			SMTPAdvertisedPort: *advertisedPort,
+			SMTPAnonymousInbox: *anonymousInbox,
 			Now:                time.Now,
 			Log:                slog.New(slog.NewTextHandler(stdout, nil)),
 		})

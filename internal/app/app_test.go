@@ -420,6 +420,7 @@ type listedInbox struct {
 	ID           string
 	Name         string
 	MessageCount int
+	Anonymous    bool
 }
 
 type inboxList struct {

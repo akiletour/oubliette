@@ -129,9 +129,11 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
                 <IconButton label={t.switchInbox} onClick={() => setDialog('switch')} className="-ml-1 lg:hidden">
                   <ChevronsUpDown {...icon} />
                 </IconButton>
-                <IconButton label={t.renameInbox} onClick={() => setDialog('rename')} className="-ml-1 shrink-0">
-                  <Pencil {...icon} />
-                </IconButton>
+                {!selected.anonymous && (
+                  <IconButton label={t.renameInbox} onClick={() => setDialog('rename')} className="-ml-1 shrink-0">
+                    <Pencil {...icon} />
+                  </IconButton>
+                )}
               </>
             }
             actions={
@@ -145,9 +147,11 @@ export function Shell({ session, onSessionChange }: { session: Session; onSessio
                 <IconButton label={t.emptyTheInbox} onClick={() => setDialog('empty')} disabled={place.messageCount === 0}>
                   <Eraser {...icon} />
                 </IconButton>
-                <IconButton label={t.deleteInbox} onClick={() => setDialog('delete')}>
-                  <Trash2 {...icon} />
-                </IconButton>
+                {!selected.anonymous && (
+                  <IconButton label={t.deleteInbox} onClick={() => setDialog('delete')}>
+                    <Trash2 {...icon} />
+                  </IconButton>
+                )}
               </>
             }
           />

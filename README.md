@@ -31,7 +31,7 @@ The details panel shows the headers, the attachments and the SMTP envelope. The 
 
 <img alt="The Integration tab of an Inbox, with the SMTP host, port, username and password, each with a copy button, and a block of environment variables." src="https://raw.githubusercontent.com/akiletour/oubliette/main/docs/screenshots/integration-light.webp">
 
-The Integration tab gives the host, port, username and password, and the same four as environment variables to paste into the Application's `.env`. Regenerating them refuses the old pair at once, even on a connection that is already open.
+The Integration tab gives the host, port, username and password, and the same four as environment variables to paste into the Application's `.env`. Regenerating them refuses the old pair at once, even on a connection that is already open, unless the instance has an Anonymous Inbox (see below).
 
 ### What the customer sees
 
@@ -93,6 +93,16 @@ printf '%s\n' "$PASSWORD" | docker exec -i oubliette oubliette member add you@ex
 
 `member list`, `member remove <email>` and `member set-password <email>` manage the other accounts. There is no sign-up and no password reset by email. Members exist only when the Operator creates them.
 
+### Replacing Mailpit
+
+Applications set up for Mailpit often send without credentials, or with placeholder ones. Name an Anonymous Inbox and they keep working unchanged:
+
+```sh
+--smtp-anonymous-inbox Default --smtp-insecure-auth
+```
+
+Every Message sent without Credentials, or with Credentials that belong to no Inbox, lands in that Inbox. An Application that presents the Credentials of another Inbox still lands in its own. The name ignores case, the Inbox is created if none has it, and when several share it the oldest one is used. While the setting names it, the Inbox can't be renamed or deleted. The price is that wrong Credentials no longer show up as an error, and Credentials you regenerate fall into the Anonymous Inbox instead of being refused.
+
 ### SMTP encryption
 
 The server won't start without a certificate (`--smtp-tls-cert` and `--smtp-tls-key`) or the override `--smtp-insecure-auth`. With a certificate, Applications must use STARTTLS before they authenticate, unless the override is also set. In that case the override wins and the server logs a warning at start, so remove the override when you add a certificate. The files are read again at each TLS handshake, which means a certificate renewed by cert-manager or ACME is picked up without a restart.
@@ -118,6 +128,7 @@ Every flag has an environment variable with the `OUBLIETTE_` prefix, and the fla
 | `--smtp-insecure-auth` | `OUBLIETTE_SMTP_INSECURE_AUTH` | `false` | Accept SMTP authentication without encryption. Only on a private network. |
 | `--smtp-advertised-host` | `OUBLIETTE_SMTP_ADVERTISED_HOST` | the host of the page | SMTP host shown in the Integration tab. |
 | `--smtp-advertised-port` | `OUBLIETTE_SMTP_ADVERTISED_PORT` | the listening port | SMTP port shown in the Integration tab. |
+| `--smtp-anonymous-inbox` | `OUBLIETTE_SMTP_ANONYMOUS_INBOX` | none | Inbox that holds Messages sent without Credentials or with Credentials of no Inbox, as Mailpit accepts any sender. Created at start if no Inbox has that name. |
 | `--retention-days` | `OUBLIETTE_RETENTION_DAYS` | `30` | Days a Message is kept before it is purged, from 1 to 36500. |
 | `--inbox-cap` | `OUBLIETTE_INBOX_CAP` | `1000` | Messages an Inbox holds, the oldest leaving first, from 1 to 1000000. |
 | `--max-message-mb` | `OUBLIETTE_MAX_MESSAGE_MB` | `25` | Largest Message accepted, in MB of 1,048,576 bytes, from 1 to 100. |

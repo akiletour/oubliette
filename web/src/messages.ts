@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export type Inbox = { id: string; name: string; messageCount: number }
+export type Inbox = { id: string; name: string; messageCount: number; anonymous?: boolean }
 
 export type Message = { id: string; receivedAt: string; subject: string; preview: string; sender: string; recipients: string[] }
 
@@ -14,7 +14,7 @@ export type OpenedMessage = Message & {
   attachments: Array<{ name: string; type: string; size: number }>
 }
 
-export type Credentials = { smtpHost: string; smtpPort: number; smtpUsername: string; smtpPassword: string }
+export type Credentials = { smtpHost: string; smtpPort: number; smtpUsername: string; smtpPassword: string; anonymous: boolean }
 
 export type ShareLink = { id: string; label: string; token: string; createdAt: string; expiresAt: string | null; lastOpenedAt: string | null; expired: boolean }
 

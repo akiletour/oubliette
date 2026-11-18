@@ -35,6 +35,7 @@ type Config struct {
 	PurgeEvery         time.Duration
 	SMTPAdvertisedHost string
 	SMTPAdvertisedPort string
+	SMTPAnonymousInbox string
 	Now                func() time.Time
 	Log                *slog.Logger
 }
@@ -68,6 +69,10 @@ func Start(cfg Config) (*Server, error) {
 	if err == nil {
 		err = createFirstInbox(storage, cfg)
 	}
+	var anonymousInbox string
+	if err == nil {
+		anonymousInbox, err = bindAnonymousInbox(storage, cfg)
+	}
 	if err != nil {
 		for _, listener := range []net.Listener{httpListener, smtpListener} {
 			if listener != nil {
@@ -83,7 +88,7 @@ func Start(cfg Config) (*Server, error) {
 	server := &Server{
 		store: storage,
 		http: &http.Server{
-			Handler:           httpapi.New(storage, hub, httpapi.SMTPEndpoint{Host: advertised.Host, Port: cmp.Or(advertised.Port, smtpPort)}, web.Dist(), cfg.Now, cfg.Log),
+			Handler:           httpapi.New(storage, hub, httpapi.SMTPEndpoint{Host: advertised.Host, Port: cmp.Or(advertised.Port, smtpPort)}, anonymousInbox, web.Dist(), cfg.Now, cfg.Log),
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          slog.NewLogLogger(cfg.Log.Handler(), slog.LevelError),
 			BaseContext:       func(net.Listener) context.Context { return streaming },
@@ -94,6 +99,7 @@ func Start(cfg Config) (*Server, error) {
 			InsecureAuth:    cfg.InsecureAuth,
 			MaxMessageBytes: cfg.MaxMessageBytes,
 			InboxCap:        cfg.InboxCap,
+			AnonymousInbox:  anonymousInbox,
 		}, cfg.Now, cfg.Log),
 		smtpAddr: smtpListener.Addr().String(),
 	}
@@ -141,6 +147,18 @@ func createFirstInbox(storage *store.Store, cfg Config) error {
 	}
 	cfg.Log.Info("created the first Inbox", "name", inbox.Name, "smtp_username", inbox.Username, "smtp_password", inbox.Password)
 	return nil
+}
+
+func bindAnonymousInbox(storage *store.Store, cfg Config) (string, error) {
+	if cfg.SMTPAnonymousInbox == "" {
+		return "", nil
+	}
+	inbox, created, err := storage.EnsureInbox(context.Background(), cfg.SMTPAnonymousInbox, cfg.Now())
+	if err != nil {
+		return "", fmt.Errorf("the Anonymous Inbox could not be set up: check --smtp-anonymous-inbox (OUBLIETTE_SMTP_ANONYMOUS_INBOX): %w", err)
+	}
+	cfg.Log.Info("holding Messages sent without valid Credentials in the Anonymous Inbox", "name", inbox.Name, "created", created)
+	return inbox.ID, nil
 }
 
 func (s *Server) HTTPAddr() string {
