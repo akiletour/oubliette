@@ -25,6 +25,26 @@ const en = {
   messageViews: 'Message views',
   rendered: 'Rendered',
   text: 'Text',
+  source: 'Source',
+  raw: 'Raw',
+  previewWidth: 'Preview width',
+  mobile: 'Mobile width, 375 px',
+  tablet: 'Tablet width, 768 px',
+  desktop: 'Desktop width',
+  showDetails: 'Show the details',
+  hideDetails: 'Hide the details',
+  closeDetails: 'Close the details',
+  details: 'Details',
+  from: 'From',
+  to: 'To',
+  received: 'Received',
+  size: 'Size',
+  attachments: 'Attachments',
+  noAttachment: 'No attachment.',
+  download: (name: string) => `Download ${name}`,
+  envelope: 'SMTP envelope',
+  headers: 'Headers',
+  rawFailed: 'The raw source could not be loaded.',
   renderingOf: (subject: string) => `Rendering of “${subject}”`,
   noTextVersion: 'This message has no text version.',
   messageMissing: 'This message does not exist.',
@@ -103,6 +123,26 @@ const fr: typeof en = {
   messageViews: 'Vues du message',
   rendered: 'Rendu',
   text: 'Texte',
+  source: 'Source',
+  raw: 'Brut',
+  previewWidth: 'Largeur de l’aperçu',
+  mobile: 'Largeur mobile, 375 px',
+  tablet: 'Largeur tablette, 768 px',
+  desktop: 'Largeur bureau',
+  showDetails: 'Afficher les détails',
+  hideDetails: 'Masquer les détails',
+  closeDetails: 'Fermer les détails',
+  details: 'Détails',
+  from: 'De',
+  to: 'À',
+  received: 'Reçu',
+  size: 'Taille',
+  attachments: 'Pièces jointes',
+  noAttachment: 'Aucune pièce jointe.',
+  download: (name: string) => `Télécharger ${name}`,
+  envelope: 'Enveloppe SMTP',
+  headers: 'En-têtes',
+  rawFailed: 'La source brute n’a pas pu être chargée.',
   renderingOf: (subject: string) => `Rendu de « ${subject} »`,
   noTextVersion: 'Ce message n’a pas de version texte.',
   messageMissing: 'Ce message n’existe pas.',
@@ -195,6 +235,17 @@ export function relativeTime(date: Date) {
 const dateFormat = new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', year: 'numeric' })
 
 export const shortDate = (date: Date) => dateFormat.format(date)
+
+const momentFormat = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'medium' })
+
+export const fullDate = (date: Date) => momentFormat.format(date)
+
+const units = ['byte', 'kilobyte', 'megabyte'] as const
+
+export function formatSize(bytes: number) {
+  const power = Math.min(units.length - 1, Math.floor(Math.log(Math.max(bytes, 1)) / Math.log(1024)))
+  return new Intl.NumberFormat(locale, { style: 'unit', unit: units[power], unitDisplay: 'short', maximumFractionDigits: power === 0 ? 0 : 1 }).format(bytes / 1024 ** power)
+}
 
 export function dayLabel(date: Date) {
   const days = calendarDaysAgo(date)

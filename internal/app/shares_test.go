@@ -51,7 +51,7 @@ func TestVisitorReadsAnInboxThroughAShareLink(t *testing.T) {
 	path := "/api/share/" + link.Token + "/messages/" + listed.Messages[1].ID
 	var opened openedMessage
 	visitor.Get(path).JSON(t, &opened)
-	if opened.Subject != "Spring sale" || !opened.HasHTML {
+	if opened.Subject != "Spring sale" || opened.HTML == "" {
 		t.Errorf("opened Message = %+v, want the sale with its HTML version", opened)
 	}
 	rendered := visitor.Get(path + "/rendered")

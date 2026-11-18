@@ -11,10 +11,19 @@ import (
 	"golang.org/x/net/html"
 )
 
+type field struct{ Name, Value string }
+
+type attachment struct {
+	Name, Type string
+	Size       int
+}
+
 type openedMessage struct {
 	message
-	Text    string
-	HasHTML bool
+	Text        string
+	HTML        string
+	Headers     []field
+	Attachments []attachment
 }
 
 const newsletter = "From: Shop <shop@example.com>\r\nTo: customer@example.com\r\nSubject: Spring sale\r\n" +
@@ -33,7 +42,7 @@ func TestMemberOpensAMessageAsHTMLOrAsText(t *testing.T) {
 	var opened openedMessage
 	member.Get(path).JSON(t, &opened)
 	if opened.Subject != "Spring sale" || opened.Sender != "Shop <shop@example.com>" ||
-		opened.Text != "Spring sale: everything at half price." || !opened.HasHTML {
+		opened.Text != "Spring sale: everything at half price." || opened.HTML == "" {
 		t.Errorf("opened Message = %+v, want the sale with its text and an HTML version", opened)
 	}
 	if rendered := member.Get(path + "/rendered"); rendered.Status != http.StatusOK || !strings.Contains(rendered.Body, "<h1>Spring sale</h1>") {
@@ -49,7 +58,7 @@ func TestTextOnlyMessageOpensAsText(t *testing.T) {
 
 	var opened openedMessage
 	member.Get(path).JSON(t, &opened)
-	if opened.Text != "Hello." || opened.HasHTML {
+	if opened.Text != "Hello." || opened.HTML != "" {
 		t.Errorf("opened Message = %+v, want its text and no HTML version", opened)
 	}
 	if rendered := member.Get(path + "/rendered"); rendered.Status != http.StatusNotFound {
@@ -67,7 +76,7 @@ func TestOpeningRefusesWhatItCannotResolve(t *testing.T) {
 		member.MessagePath("unknown"),
 		"/api/inboxes/unknown/messages/" + held,
 	} {
-		for _, view := range []string{path, path + "/rendered"} {
+		for _, view := range []string{path, path + "/rendered", path + "/raw", path + "/attachments/0"} {
 			if got := member.Get(view); got.Status != http.StatusNotFound {
 				t.Errorf("GET %s = %d %s, want 404", view, got.Status, got.Body)
 			}

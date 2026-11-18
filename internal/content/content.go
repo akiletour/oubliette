@@ -3,6 +3,7 @@ package content
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"io"
 	"math"
@@ -14,16 +15,19 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/jhillyerd/enmime/v2"
+	"github.com/jhillyerd/enmime/v2/mediatype"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 	"golang.org/x/net/html/charset"
 )
 
 const (
-	previewSource = 256 << 10
-	previewLength = 200
+	previewSource   = 256 << 10
+	previewLength   = 200
+	zeroWidthJoiner = '\u200d'
 )
 
 type limits struct {
@@ -37,9 +41,18 @@ var (
 )
 
 type Body struct {
-	Text   string
-	HTML   string
-	Images map[string]Image
+	Text        string
+	HTML        string
+	Images      map[string]Image
+	Attachments []Attachment
+}
+
+type Attachment struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Size      int    `json:"size"`
+	Data      []byte `json:"-"`
+	contentID string
 }
 
 type Image struct {
@@ -58,6 +71,41 @@ func Split(raw []byte) (textproto.MIMEHeader, io.Reader, error) {
 	return header, body, err
 }
 
+type Field struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+var encodedWords = mime.WordDecoder{CharsetReader: charset.NewReaderLabel}
+
+func readable(value string) string {
+	if decoded, err := encodedWords.DecodeHeader(value); err == nil {
+		value = decoded
+	}
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.In(r, unicode.Cc, unicode.Cf) && r != zeroWidthJoiner {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(value, "")))
+}
+
+func Headers(raw []byte) []Field {
+	lines := textproto.NewReader(bufio.NewReader(bytes.NewReader(raw)))
+	fields := []Field{}
+	for {
+		line, err := lines.ReadContinuedLine()
+		if err != nil || line == "" {
+			return fields
+		}
+		name, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		fields = append(fields, Field{Name: strings.TrimSpace(name), Value: readable(value)})
+	}
+}
+
 func Read(raw []byte) Body {
 	header, body, _ := Split(raw)
 	return read(header, body, openLimits)
@@ -74,22 +122,33 @@ func Preview(header textproto.MIMEHeader, body io.Reader) string {
 }
 
 func read(header textproto.MIMEHeader, body io.Reader, bounds limits) Body {
-	found := Body{Images: map[string]Image{}}
+	found := Body{Images: map[string]Image{}, Attachments: []Attachment{}}
 	found.walk(header, body, bounds, bounds.depth)
+	found.Attachments = slices.DeleteFunc(found.Attachments, func(file Attachment) bool {
+		return file.contentID != "" && strings.Contains(found.HTML, file.contentID)
+	})
 	return found
 }
 
 func (b *Body) walk(header textproto.MIMEHeader, body io.Reader, bounds limits, depth int) {
-	mediaType, params, err := mime.ParseMediaType(header.Get("Content-Type"))
-	if err != nil {
+	mediaType, params, _, err := mediatype.Parse(header.Get("Content-Type"))
+	if err != nil || mediaType == "" {
 		mediaType = "text/plain"
 	}
 	id := strings.Trim(header.Get("Content-ID"), "<> ")
+	disposition, dispositionParams, _, _ := mediatype.Parse(header.Get("Content-Disposition"))
+	name := cmp.Or(dispositionParams["filename"], params["name"])
 	switch {
 	case strings.HasPrefix(mediaType, "image/") && id != "":
-		data, _ := io.ReadAll(decoded(header, body))
+		data := readAll(header, body)
 		b.Images[id] = Image{Type: mediaType, Data: data}
-	case strings.HasPrefix(strings.ToLower(header.Get("Content-Disposition")), "attachment"):
+		file := attachment(mediaType, name, data)
+		if disposition != "attachment" {
+			file.contentID = id
+		}
+		b.Attachments = append(b.Attachments, file)
+	case disposition == "attachment":
+		b.Attachments = append(b.Attachments, attachment(mediaType, name, readAll(header, body)))
 	case strings.HasPrefix(mediaType, "multipart/"):
 		if depth == 0 {
 			return
@@ -106,7 +165,18 @@ func (b *Body) walk(header textproto.MIMEHeader, body io.Reader, bounds limits, 
 		b.Text = strings.TrimSpace(text(header, body, bounds.text))
 	case mediaType == "text/html" && b.HTML == "":
 		b.HTML = text(header, body, bounds.text)
+	default:
+		b.Attachments = append(b.Attachments, attachment(mediaType, name, readAll(header, body)))
 	}
+}
+
+func readAll(header textproto.MIMEHeader, body io.Reader) []byte {
+	data, _ := io.ReadAll(decoded(header, body))
+	return data
+}
+
+func attachment(mediaType, name string, data []byte) Attachment {
+	return Attachment{Name: cmp.Or(readable(name), "attachment"), Type: mediaType, Size: len(data), Data: data}
 }
 
 func decoded(header textproto.MIMEHeader, body io.Reader) io.Reader {

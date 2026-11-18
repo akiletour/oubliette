@@ -22,6 +22,11 @@ export const icon = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as cons
 export const pressable =
   'rounded-md text-fg-muted transition-[color,background-color,scale] duration-(--duration-fast) ease-out hover:bg-hover hover:text-fg active:scale-[0.96] disabled:pointer-events-none disabled:text-fg-disabled'
 
+export const iconButton = cn(
+  pressable,
+  'relative grid size-8 shrink-0 place-items-center before:absolute before:-inset-1 max-md:size-11 max-md:before:hidden',
+)
+
 export const textLink = 'font-medium text-accent underline-offset-4 hover:underline max-md:py-3'
 
 export function Mark({ decorative, className }: { decorative?: boolean; className?: string }) {
@@ -50,11 +55,7 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      className={cn(
-        pressable,
-        'relative grid size-8 shrink-0 place-items-center before:absolute before:-inset-1 max-md:size-11 max-md:before:hidden',
-        className,
-      )}
+      className={cn(iconButton, className)}
       {...props}
     >
       {children}

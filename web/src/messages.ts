@@ -4,7 +4,15 @@ export type Inbox = { id: string; name: string; messageCount: number }
 
 export type Message = { id: string; receivedAt: string; subject: string; preview: string; sender: string; recipients: string[] }
 
-export type OpenedMessage = Message & { text: string; hasHTML: boolean }
+export type OpenedMessage = Message & {
+  envelopeSender: string
+  envelopeRecipients: string[]
+  size: number
+  text: string
+  html: string
+  headers: Array<{ name: string; value: string }>
+  attachments: Array<{ name: string; type: string; size: number }>
+}
 
 export type ShareLink = { id: string; label: string; token: string; createdAt: string; expiresAt: string | null; lastOpenedAt: string | null; expired: boolean }
 

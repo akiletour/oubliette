@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +53,8 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	mux.Handle("GET /api/inboxes/{inbox}/messages", a.member(a.listMessages))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}", a.member(a.openMessage))
 	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/rendered", a.member(a.renderMessage))
+	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/raw", a.member(a.showRaw))
+	mux.Handle("GET /api/inboxes/{inbox}/messages/{message}/attachments/{attachment}", a.member(a.downloadAttachment))
 	mux.Handle("POST /api/inboxes/{inbox}/share-links", a.member(a.createShareLink))
 	mux.Handle("GET /api/inboxes/{inbox}/share-links", a.member(a.listShareLinks))
 	mux.Handle("DELETE /api/inboxes/{inbox}/share-links/{link}", a.member(a.revokeShareLink))
@@ -59,6 +63,8 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	mux.Handle("GET /api/share/{token}/messages", a.visitor(a.listMessages))
 	mux.Handle("GET /api/share/{token}/messages/{message}", a.visitor(a.openMessage))
 	mux.Handle("GET /api/share/{token}/messages/{message}/rendered", a.visitor(a.renderMessage))
+	mux.Handle("GET /api/share/{token}/messages/{message}/raw", a.visitor(a.showRaw))
+	mux.Handle("GET /api/share/{token}/messages/{message}/attachments/{attachment}", a.visitor(a.downloadAttachment))
 
 	mux.HandleFunc("GET /inboxes/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, ui, "index.html")
@@ -278,40 +284,43 @@ func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "next": next})
 }
 
-func (a *api) heldMessage(w http.ResponseWriter, r *http.Request) (store.Message, content.Body, bool) {
+func (a *api) heldMessage(w http.ResponseWriter, r *http.Request) (store.Message, bool) {
 	inbox, found := a.inboxInScope(w, r)
 	if !found {
-		return store.Message{}, content.Body{}, false
+		return store.Message{}, false
 	}
 	message, found, err := a.store.Message(r.Context(), inbox.ID, r.PathValue("message"))
 	if err != nil {
 		a.fail(w, r, err)
-		return store.Message{}, content.Body{}, false
+		return store.Message{}, false
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, "no such Message")
-		return store.Message{}, content.Body{}, false
 	}
-	return message, content.Read(message.Raw), true
+	return message, found
 }
 
 func (a *api) openMessage(w http.ResponseWriter, r *http.Request) {
-	message, body, found := a.heldMessage(w, r)
+	message, found := a.heldMessage(w, r)
 	if !found {
 		return
 	}
+	body := content.Read(message.Raw)
 	writeJSON(w, http.StatusOK, struct {
 		store.Message
-		Text    string `json:"text"`
-		HasHTML bool   `json:"hasHTML"`
-	}{message, body.Text, body.HTML != ""})
+		Text        string               `json:"text"`
+		HTML        string               `json:"html"`
+		Headers     []content.Field      `json:"headers"`
+		Attachments []content.Attachment `json:"attachments"`
+	}{message, body.Text, body.HTML, content.Headers(message.Raw), body.Attachments})
 }
 
 func (a *api) renderMessage(w http.ResponseWriter, r *http.Request) {
-	_, body, found := a.heldMessage(w, r)
+	message, found := a.heldMessage(w, r)
 	if !found {
 		return
 	}
+	body := content.Read(message.Raw)
 	if body.HTML == "" {
 		writeError(w, http.StatusNotFound, "this Message has no HTML version")
 		return
@@ -321,6 +330,36 @@ func (a *api) renderMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	io.WriteString(w, body.Rendered())
+}
+
+func (a *api) downloadAttachment(w http.ResponseWriter, r *http.Request) {
+	message, found := a.heldMessage(w, r)
+	if !found {
+		return
+	}
+	body := content.Read(message.Raw)
+	n, err := strconv.Atoi(r.PathValue("attachment"))
+	if err != nil || n < 0 || n >= len(body.Attachments) {
+		writeError(w, http.StatusNotFound, "no such attachment")
+		return
+	}
+	file := body.Attachments[n]
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": file.Name}))
+	serveSandboxed(w, "application/octet-stream", file.Data)
+}
+
+func (a *api) showRaw(w http.ResponseWriter, r *http.Request) {
+	message, found := a.heldMessage(w, r)
+	if found {
+		serveSandboxed(w, "text/plain; charset=utf-8", message.Raw)
+	}
+}
+
+func serveSandboxed(w http.ResponseWriter, contentType string, data []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write(data)
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {

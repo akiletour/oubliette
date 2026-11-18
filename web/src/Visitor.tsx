@@ -39,6 +39,7 @@ export function Visitor() {
         place={shared}
         messageId={messageId}
         onSessionEnd={ignore}
+        inspectorWhenRoomy
         footer={
           <span className="ml-auto flex shrink-0">
             <ThemeToggle />

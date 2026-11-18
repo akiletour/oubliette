@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { dayLabel, relativeTime, t } from './i18n'
 import { fromTo, getJSON, messageAt, useMinuteTick, type Message } from './messages'
 import { link } from './router'
-import { Stage } from './Stage'
+import { Stage, type Width } from './Stage'
 import { Eyebrow, Mark, cn, pressable } from './ui'
 
 export type Place = { key: string; name: string; messageCount: number; api: string; page: string }
@@ -28,16 +28,23 @@ export function Workspace({
   place,
   messageId,
   onSessionEnd,
+  inspectorWhenRoomy,
   footer,
   children,
 }: {
   place?: Place
   messageId?: string
   onSessionEnd: () => void
+  inspectorWhenRoomy?: boolean
   footer: ReactNode
   children: ReactNode
 }) {
   const wide = useMediaQuery('(min-width: 768px)')
+  const roomy = useMediaQuery('(min-width: 1280px)')
+  const [chosenWidth, setChosenWidth] = useState<Width>()
+  const width = chosenWidth ?? (wide ? 'desktop' : 'mobile')
+  const [inspectorChoice, setInspectorChoice] = useState<boolean>()
+  const inspector = inspectorChoice ?? (roomy && inspectorWhenRoomy === true)
   const open = place !== undefined && messageId !== undefined
   const shown = useLastDefined(open ? messageId : undefined)
   const staged = wide ? (open ? messageId : undefined) : shown
@@ -58,7 +65,13 @@ export function Workspace({
         className="relative flex min-w-0 flex-1 overflow-hidden bg-surface-sunken max-md:absolute max-md:inset-x-0 max-md:top-2 max-md:bottom-0 max-md:z-10 max-md:translate-y-full max-md:rounded-t-xl max-md:shadow-sheet max-md:transition-transform max-md:duration-(--duration-base) max-md:ease-out max-md:data-[open=true]:translate-y-0 max-md:data-[open=true]:duration-(--duration-slow) md:my-2 md:mr-2 md:rounded-xl md:border md:border-line"
       >
         {place && staged ? (
-          <Stage key={staged} place={place} messageId={staged} onSessionEnd={onSessionEnd} />
+          <Stage
+            key={staged}
+            place={place}
+            messageId={staged}
+            onSessionEnd={onSessionEnd}
+            preview={{ width, onWidth: setChosenWidth, inspector, onInspector: setInspectorChoice }}
+          />
         ) : (
           <div className="grid flex-1 place-items-center">
             <Mark decorative className="size-10 text-fg-disabled" />
