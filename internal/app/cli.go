@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,11 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	data := flags.String("data", cmp.Or(getenv("OUBLIETTE_DATA"), "oubliette.db"), "data file (OUBLIETTE_DATA)")
 	httpAddr := flags.String("http-addr", cmp.Or(getenv("OUBLIETTE_HTTP_ADDR"), ":8080"),
 		"address the web interface listens on (OUBLIETTE_HTTP_ADDR)")
+	smtpAddr := flags.String("smtp-addr", cmp.Or(getenv("OUBLIETTE_SMTP_ADDR"), ":1025"),
+		"address the SMTP server listens on (OUBLIETTE_SMTP_ADDR)")
+	insecureAuthFromEnv, _ := strconv.ParseBool(getenv("OUBLIETTE_SMTP_INSECURE_AUTH"))
+	insecureAuth := flags.Bool("smtp-insecure-auth", insecureAuthFromEnv,
+		"accept SMTP authentication without encryption (OUBLIETTE_SMTP_INSECURE_AUTH)")
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -52,10 +58,12 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	switch args = flags.Args(); {
 	case len(args) == 1 && args[0] == "serve":
 		err = serve(ctx, Config{
-			DataFile: *data,
-			HTTPAddr: *httpAddr,
-			Now:      time.Now,
-			Log:      slog.New(slog.NewTextHandler(stdout, nil)),
+			DataFile:     *data,
+			HTTPAddr:     *httpAddr,
+			SMTPAddr:     *smtpAddr,
+			InsecureAuth: *insecureAuth,
+			Now:          time.Now,
+			Log:          slog.New(slog.NewTextHandler(stdout, nil)),
 		})
 	case len(args) > 1 && args[0] == "member":
 		err = member(ctx, *data, args[1], args[2:], stdin, stdout, stderr)

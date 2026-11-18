@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -43,6 +44,8 @@ func New(storage *store.Store, ui fs.FS, now func() time.Time, log *slog.Logger)
 	signedIn := http.NewServeMux()
 	signedIn.HandleFunc("GET /api/session", a.showSession)
 	signedIn.HandleFunc("DELETE /api/session", a.signOut)
+	signedIn.HandleFunc("GET /api/inboxes", a.listInboxes)
+	signedIn.HandleFunc("GET /api/inboxes/{inbox}/messages", a.listMessages)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +156,37 @@ func (a *api) signOut(w http.ResponseWriter, r *http.Request) {
 	}
 	setSessionCookie(w, r, "", -1)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) listInboxes(w http.ResponseWriter, r *http.Request) {
+	inboxes, err := a.store.Inboxes(r.Context())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inboxes": inboxes})
+}
+
+func (a *api) listMessages(w http.ResponseWriter, r *http.Request) {
+	inbox, found, err := a.store.Inbox(r.Context(), r.PathValue("inbox"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "no such Inbox")
+		return
+	}
+	messages, next, err := a.store.Messages(r.Context(), inbox.ID, r.URL.Query().Get("before"))
+	if errors.Is(err, store.ErrPosition) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "next": next})
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
+	"net/smtp"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,12 +35,31 @@ func (c *clock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+type logs struct {
+	mu      sync.Mutex
+	written bytes.Buffer
+}
+
+func (l *logs) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.Write(p)
+}
+
+func (l *logs) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.String()
+}
+
 type instance struct {
-	t      *testing.T
-	Data   string
-	Clock  *clock
-	URL    string
-	server *app.Server
+	t        *testing.T
+	Data     string
+	Clock    *clock
+	URL      string
+	SMTPAddr string
+	logs     *logs
+	server   *app.Server
 }
 
 func start(t *testing.T) *instance {
@@ -49,6 +69,7 @@ func start(t *testing.T) *instance {
 		t:     t,
 		Data:  filepath.Join(t.TempDir(), "oubliette.db"),
 		Clock: &clock{now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)},
+		logs:  &logs{},
 	}
 	i.boot()
 	t.Cleanup(i.stop)
@@ -58,16 +79,149 @@ func start(t *testing.T) *instance {
 func (i *instance) boot() {
 	i.t.Helper()
 	server, err := app.Start(app.Config{
-		DataFile: i.Data,
-		HTTPAddr: "127.0.0.1:0",
-		Now:      i.Clock.Now,
-		Log:      slog.New(slog.DiscardHandler),
+		DataFile:     i.Data,
+		HTTPAddr:     "127.0.0.1:0",
+		SMTPAddr:     "127.0.0.1:0",
+		InsecureAuth: true,
+		Now:          i.Clock.Now,
+		Log:          slog.New(slog.NewJSONHandler(i.logs, nil)),
 	})
 	if err != nil {
 		i.t.Fatalf("start server: %v", err)
 	}
 	i.server = server
 	i.URL = "http://" + server.HTTPAddr()
+	i.SMTPAddr = server.SMTPAddr()
+}
+
+type credentials struct {
+	Username string `json:"smtp_username"`
+	Password string `json:"smtp_password"`
+}
+
+func (i *instance) LoggedCredentials() []credentials {
+	i.t.Helper()
+	var logged []credentials
+	for line := range strings.Lines(i.logs.String()) {
+		var entry credentials
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			i.t.Fatalf("log line %q: %v", line, err)
+		}
+		if entry.Username != "" {
+			logged = append(logged, entry)
+		}
+	}
+	return logged
+}
+
+func plain(c credentials) smtp.Auth {
+	return smtp.PlainAuth("", c.Username, c.Password, "127.0.0.1")
+}
+
+type login credentials
+
+func (l login) Start(*smtp.ServerInfo) (string, []byte, error) {
+	return "LOGIN", nil, nil
+}
+
+func (l login) Next(challenge []byte, more bool) ([]byte, error) {
+	switch {
+	case !more:
+		return nil, nil
+	case strings.HasPrefix(strings.ToLower(string(challenge)), "username"):
+		return []byte(l.Username), nil
+	default:
+		return []byte(l.Password), nil
+	}
+}
+
+func (i *instance) Connect(auth smtp.Auth) (*smtp.Client, error) {
+	i.t.Helper()
+	client, err := smtp.Dial(i.SMTPAddr)
+	if err != nil {
+		i.t.Fatalf("connect to SMTP: %v", err)
+	}
+	i.t.Cleanup(func() { client.Close() })
+	if auth != nil {
+		if err := client.Auth(auth); err != nil {
+			return nil, err
+		}
+	}
+	return client, nil
+}
+
+func transmit(client *smtp.Client, from string, to []string, data string) error {
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	for _, recipient := range to {
+		if err := client.Rcpt(recipient); err != nil {
+			return err
+		}
+	}
+	body, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(body, data); err != nil {
+		return err
+	}
+	return body.Close()
+}
+
+func (i *instance) Submit(auth smtp.Auth, from string, to []string, data string) error {
+	i.t.Helper()
+	client, err := i.Connect(auth)
+	if err != nil {
+		return err
+	}
+	if err := transmit(client, from, to, data); err != nil {
+		return err
+	}
+	return client.Quit()
+}
+
+type message struct {
+	ID                 string
+	ReceivedAt         time.Time
+	Subject            string
+	Sender             string
+	Recipients         []string
+	EnvelopeSender     string
+	EnvelopeRecipients []string
+}
+
+type messageList struct {
+	Messages []message
+	Next     string
+}
+
+func (b *browser) MessagePage(before string) messageList {
+	t := b.i.t
+	t.Helper()
+	var inboxes inboxList
+	b.Get("/api/inboxes").JSON(t, &inboxes)
+	if len(inboxes.Inboxes) != 1 {
+		t.Fatalf("got %d Inboxes, want 1", len(inboxes.Inboxes))
+	}
+	var page messageList
+	b.Get("/api/inboxes/"+inboxes.Inboxes[0].ID+"/messages?before="+before).JSON(t, &page)
+	return page
+}
+
+func (b *browser) Messages() []message {
+	b.i.t.Helper()
+	return b.MessagePage("").Messages
+}
+
+func (i *instance) SignedInMember() *browser {
+	i.t.Helper()
+	i.AddMember("member@example.com", password)
+	b := i.Browser()
+	if signedIn := b.SignIn("member@example.com", password); signedIn.Status != http.StatusNoContent {
+		i.t.Fatalf("sign in = %d %s, want 204", signedIn.Status, signedIn.Body)
+	}
+	return b
 }
 
 func (i *instance) stop() {
@@ -157,6 +311,16 @@ func (b *browser) SignIn(email, password string, headers ...string) response {
 		b.i.t.Fatalf("sign in: %v", err)
 	}
 	return b.Do(http.MethodPost, "/api/session", string(body), headers...)
+}
+
+func (r response) JSON(t *testing.T, into any) {
+	t.Helper()
+	if r.Status != http.StatusOK {
+		t.Fatalf("response = %d %s, want 200", r.Status, r.Body)
+	}
+	if err := json.Unmarshal([]byte(r.Body), into); err != nil {
+		t.Fatalf("response %s: %v", r.Body, err)
+	}
 }
 
 func (r response) Cookie(t *testing.T) *http.Cookie {

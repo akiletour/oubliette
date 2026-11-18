@@ -4,11 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/smtp"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +213,7 @@ func TestAPIRefusesRequestsWithoutAValidSession(t *testing.T) {
 		{http.MethodDelete, "/api/session"},
 		{http.MethodGet, "/api/inboxes"},
 		{http.MethodPost, "/api/inboxes"},
+		{http.MethodGet, "/api/inboxes/any/messages"},
 	} {
 		if anonymous := i.Browser().Do(request.method, request.path, ""); anonymous.Status != http.StatusUnauthorized {
 			t.Errorf("%s %s without a session = %d, want 401", request.method, request.path, anonymous.Status)
@@ -387,23 +394,347 @@ func TestSecretsAreNotStoredInClear(t *testing.T) {
 	}
 }
 
+type inboxList struct {
+	Inboxes []struct {
+		ID   string
+		Name string
+	}
+}
+
+func TestFirstStartCreatesOneInboxAndLogsItsCredentials(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+
+	logged := i.LoggedCredentials()
+	if len(logged) != 1 || logged[0].Username == "" || logged[0].Password == "" {
+		t.Fatalf("first start logged %d Credentials (%+v), want one complete pair", len(logged), logged)
+	}
+	var first inboxList
+	member.Get("/api/inboxes").JSON(t, &first)
+	if len(first.Inboxes) != 1 || first.Inboxes[0].ID == "" || first.Inboxes[0].Name == "" {
+		t.Fatalf("Inboxes after the first start = %+v, want one named Inbox", first.Inboxes)
+	}
+
+	i.Restart()
+
+	if again := i.LoggedCredentials(); len(again) != 1 {
+		t.Errorf("after a restart %d Credentials were logged in total, want 1", len(again))
+	}
+	var later inboxList
+	member.Get("/api/inboxes").JSON(t, &later)
+	if len(later.Inboxes) != 1 || later.Inboxes[0].ID != first.Inboxes[0].ID {
+		t.Errorf("Inboxes after a restart = %+v, want the same single Inbox %+v", later.Inboxes, first.Inboxes)
+	}
+}
+
+const welcome = "From: Shop <shop@example.com>\r\nTo: Customer <customer@example.com>\r\nSubject: Welcome\r\n\r\nHello.\r\n"
+
+func TestApplicationSubmitsAMessageTheMemberSeesInTheInbox(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	application := i.LoggedCredentials()[0]
+
+	if err := i.Submit(plain(application), "bounces@staging.example", []string{"customer@example.com"}, welcome); err != nil {
+		t.Fatalf("submit with PLAIN: %v", err)
+	}
+	if err := i.Submit(login(application), "bounces@staging.example", []string{"customer@example.com"}, welcome); err != nil {
+		t.Fatalf("submit with LOGIN: %v", err)
+	}
+
+	held := member.Messages()
+	if len(held) != 2 {
+		t.Fatalf("the Inbox holds %d Messages, want 2", len(held))
+	}
+	for _, got := range held {
+		if got.Subject != "Welcome" || got.Sender != "Shop <shop@example.com>" ||
+			!slices.Equal(got.Recipients, []string{"Customer <customer@example.com>"}) || !got.ReceivedAt.Equal(i.Clock.Now()) {
+			t.Errorf("held Message = %+v, want Welcome from Shop to Customer received at %s", got, i.Clock.Now())
+		}
+	}
+}
+
+func TestSubmissionWithoutValidCredentialsIsRefusedAndNothingIsHeld(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	application := i.LoggedCredentials()[0]
+
+	for name, attempt := range map[string]struct {
+		auth smtp.Auth
+		code int
+	}{
+		"no Credentials":            {nil, 530},
+		"wrong password":            {plain(credentials{application.Username, "not the password"}), 535},
+		"empty password":            {plain(credentials{application.Username, ""}), 535},
+		"unknown username":          {plain(credentials{"nobody", application.Password}), 535},
+		"wrong password with LOGIN": {login{application.Username, "not the password"}, 535},
+	} {
+		err := i.Submit(attempt.auth, "bounces@staging.example", []string{"customer@example.com"}, welcome)
+		var refusal *textproto.Error
+		if !errors.As(err, &refusal) || refusal.Code != attempt.code || refusal.Msg == "" {
+			t.Errorf("%s: submission answered %v, want SMTP error %d with an explanation", name, err, attempt.code)
+		}
+	}
+
+	if held := member.Messages(); len(held) != 0 {
+		t.Fatalf("the Inbox holds %d Messages after refused submissions, want none", len(held))
+	}
+}
+
+func TestEnvelopeIsKeptWhateverTheAddresses(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	sender := "noreply@unregistered-domain.invalid"
+	recipients := []string{"customer@example.com", "hidden-copy@elsewhere.example", "nobody@nowhere.invalid"}
+
+	if err := i.Submit(plain(i.LoggedCredentials()[0]), sender, recipients, welcome); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	held := member.Messages()
+	if len(held) != 1 {
+		t.Fatalf("a Message sent to %d recipients is held %d times, want once", len(recipients), len(held))
+	}
+	if held[0].EnvelopeSender != sender || !slices.Equal(held[0].EnvelopeRecipients, recipients) {
+		t.Errorf("envelope = %q to %q, want %q to %q", held[0].EnvelopeSender, held[0].EnvelopeRecipients, sender, recipients)
+	}
+	if !slices.Equal(held[0].Recipients, []string{"Customer <customer@example.com>"}) {
+		t.Errorf("displayed recipients = %q, want only the one named in the headers", held[0].Recipients)
+	}
+}
+
+func TestListFieldsAreReadFromTheHeadersWhenThereAreSome(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	application := plain(i.LoggedCredentials()[0])
+	encoded := "From: =?UTF-8?Q?J=C3=A9r=C3=B4me?= <jerome@example.com>\r\n" +
+		"To: =?UTF-8?Q?Dupont=2C_Jean?= <a@example.com>\r\nCc: Bob <b@example.com>\r\n" +
+		"Subject: =?UTF-8?B?UsOpaW5pdGlhbGlzYXRpb24=?=\r\n\r\nBonjour.\r\n"
+	disguised := "From: =?UTF-8?Q?Bank_=3Cceo=40bank.example=3E?= <someone@elsewhere.example>\r\nSubject: Disguised\r\n\r\nHello.\r\n"
+
+	for name, data := range map[string]string{"encoded": encoded, "disguised": disguised, "headerless": "No header at all, only text.\r\n"} {
+		if err := i.Submit(application, "app@staging.example", []string{"a@example.com"}, data); err != nil {
+			t.Fatalf("submit the %s Message: %v", name, err)
+		}
+	}
+
+	listed := map[string]message{}
+	for _, held := range member.Messages() {
+		listed[held.Subject] = held
+	}
+	if len(listed) != 3 {
+		t.Fatalf("the Inbox lists %d distinct subjects, want 3: %+v", len(listed), listed)
+	}
+	if decoded := listed["Réinitialisation"]; decoded.Sender != "Jérôme <jerome@example.com>" ||
+		!slices.Equal(decoded.Recipients, []string{"Dupont, Jean <a@example.com>", "Bob <b@example.com>"}) {
+		t.Errorf("encoded Message listed as %+v", decoded)
+	}
+	if sender := listed["Disguised"].Sender; !strings.HasSuffix(sender, "<someone@elsewhere.example>") || strings.Contains(sender, ",") {
+		t.Errorf("a name that looks like an address is listed as %q, want one sender ending with the real address", sender)
+	}
+	if bare := listed[""]; bare.Sender != "app@staging.example" || !slices.Equal(bare.Recipients, []string{"a@example.com"}) {
+		t.Errorf("Message without headers listed as %+v, want the envelope addresses", bare)
+	}
+}
+
+func TestMessageWithVeryLongLinesIsHeld(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	minified := "Subject: Minified\r\nContent-Type: text/html\r\n\r\n<p>" + strings.Repeat("x", 200_000) + "</p>\r\n"
+
+	if err := i.Submit(plain(i.LoggedCredentials()[0]), "app@staging.example", []string{"a@example.com"}, minified); err != nil {
+		t.Fatalf("submit a Message with a 200 kB line: %v", err)
+	}
+
+	if held := member.Messages(); len(held) != 1 || held[0].Subject != "Minified" {
+		t.Fatalf("held Messages = %+v, want the minified one", held)
+	}
+}
+
+func TestEachTransactionOnAConnectionKeepsItsOwnEnvelope(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	client, err := i.Connect(plain(i.LoggedCredentials()[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := transmit(client, "first@staging.example", []string{"one@example.com"}, "Subject: First\r\n\r\nHello.\r\n"); err != nil {
+		t.Fatalf("first transaction: %v", err)
+	}
+	if err := errors.Join(client.Mail("abandoned@staging.example"), client.Rcpt("stale@example.com")); err != nil {
+		t.Fatalf("abandoned transaction: %v", err)
+	}
+	if err := transmit(client, "second@staging.example", []string{"two@example.com"}, "Subject: Second\r\n\r\nHello.\r\n"); err != nil {
+		t.Fatalf("second transaction: %v", err)
+	}
+
+	envelopes := map[string]message{}
+	for _, held := range member.Messages() {
+		envelopes[held.Subject] = held
+	}
+	for subject, want := range map[string]struct{ sender, recipient string }{
+		"First":  {"first@staging.example", "one@example.com"},
+		"Second": {"second@staging.example", "two@example.com"},
+	} {
+		if got := envelopes[subject]; got.EnvelopeSender != want.sender || !slices.Equal(got.EnvelopeRecipients, []string{want.recipient}) {
+			t.Errorf("%s held with envelope %q to %q, want %q to %q", subject, got.EnvelopeSender, got.EnvelopeRecipients, want.sender, want.recipient)
+		}
+	}
+}
+
+func TestMessagesAreListedNewestFirstInPages(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	application := plain(i.LoggedCredentials()[0])
+	for n := 1; n <= 51; n++ {
+		if n > 2 && n < 50 {
+			i.Clock.Advance(time.Second)
+		}
+		data := fmt.Sprintf("From: app@example.com\r\nSubject: Message %d\r\n\r\nHello.\r\n", n)
+		if err := i.Submit(application, "app@example.com", []string{"customer@example.com"}, data); err != nil {
+			t.Fatalf("submit Message %d: %v", n, err)
+		}
+	}
+
+	first := member.MessagePage("")
+	second := member.MessagePage(first.Next)
+
+	if len(first.Messages) != 50 || first.Next == "" || len(second.Messages) != 1 || second.Next != "" {
+		t.Fatalf("pages hold %d then %d Messages (next %q then %q), want 50 with a next page, then 1 without",
+			len(first.Messages), len(second.Messages), first.Next, second.Next)
+	}
+	if first.Messages[3].Subject != "Message 48" || first.Messages[48].Subject != "Message 3" {
+		t.Errorf("first page runs from %q to %q between its ties, want Message 48 down to Message 3",
+			first.Messages[3].Subject, first.Messages[48].Subject)
+	}
+	all := append(first.Messages, second.Messages...)
+	subjects := map[string]bool{}
+	for n, listed := range all {
+		subjects[listed.Subject] = true
+		if n > 0 && listed.ReceivedAt.After(all[n-1].ReceivedAt) {
+			t.Errorf("%q is listed after an older Message", listed.Subject)
+		}
+	}
+	if len(subjects) != 51 {
+		t.Errorf("the two pages list %d distinct Messages, want all 51", len(subjects))
+	}
+}
+
+func TestMessageListRefusesWhatItCannotResolve(t *testing.T) {
+	i := start(t)
+	member := i.SignedInMember()
+	var inboxes inboxList
+	member.Get("/api/inboxes").JSON(t, &inboxes)
+
+	if missing := member.Get("/api/inboxes/no-such-inbox/messages"); missing.Status != http.StatusNotFound {
+		t.Errorf("Message list of an unknown Inbox = %d, want 404", missing.Status)
+	}
+	if malformed := member.Get("/api/inboxes/" + inboxes.Inboxes[0].ID + "/messages?before=nonsense"); malformed.Status != http.StatusBadRequest {
+		t.Errorf("Message list from a malformed position = %d, want 400", malformed.Status)
+	}
+}
+
+func TestStopDoesNotWaitForAnIdleApplication(t *testing.T) {
+	i := start(t)
+	if _, err := i.Connect(plain(i.LoggedCredentials()[0])); err != nil {
+		t.Fatal(err)
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- i.server.Stop(context.Background()) }()
+
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Errorf("stop with an idle SMTP connection: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server waits for an idle SMTP connection to stop")
+	}
+	i.boot()
+}
+
+func TestFailedStartDoesNotUseUpTheFirstInbox(t *testing.T) {
+	i := start(t)
+	data := filepath.Join(t.TempDir(), "oubliette.db")
+	var output logs
+	busy := app.Config{
+		DataFile:     data,
+		HTTPAddr:     i.server.HTTPAddr(),
+		SMTPAddr:     "127.0.0.1:0",
+		InsecureAuth: true,
+		Now:          i.Clock.Now,
+		Log:          slog.New(slog.NewJSONHandler(&output, nil)),
+	}
+
+	if failed, err := app.Start(busy); err == nil {
+		failed.Stop(context.Background())
+		t.Fatal("the server started on an address already in use")
+	}
+	if strings.Contains(output.String(), "smtp_password") {
+		t.Fatalf("a start that failed logged Credentials the Operator may never see again: %s", output.String())
+	}
+
+	busy.HTTPAddr = "127.0.0.1:0"
+	recovered, err := app.Start(busy)
+	if err != nil {
+		t.Fatalf("start after a failed start: %v", err)
+	}
+	defer recovered.Stop(context.Background())
+	if logged := strings.Count(output.String(), "smtp_password"); logged != 1 {
+		t.Fatalf("the start after a failed start logged Credentials %d times, want once", logged)
+	}
+}
+
+func TestServerRefusesToStartWithoutTheInsecureAuthenticationOverride(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var stderr bytes.Buffer
+	args := []string{"--data", filepath.Join(t.TempDir(), "oubliette.db"), "--http-addr", "127.0.0.1:0", "--smtp-addr", "127.0.0.1:0", "serve"}
+
+	code := app.Main(ctx, args, strings.NewReader(""), io.Discard, &stderr, func(string) string { return "" })
+
+	if code == 0 {
+		t.Fatal("serve started without the insecure-authentication override")
+	}
+	if !strings.Contains(stderr.String(), "--smtp-insecure-auth") {
+		t.Fatalf("the refusal does not name the override: %s", stderr.String())
+	}
+
+	stderr.Reset()
+	misspelt := map[string]string{"OUBLIETTE_SMTP_INSECURE_AUTH": "yes"}
+	code = app.Main(ctx, args, strings.NewReader(""), io.Discard, &stderr, func(key string) string { return misspelt[key] })
+	if code == 0 || !strings.Contains(stderr.String(), "OUBLIETTE_SMTP_INSECURE_AUTH") {
+		t.Fatalf("an unreadable override gave exit %d and %q, want a refusal naming the variable", code, stderr.String())
+	}
+}
+
 func TestServeCommandRunsUntilInterrupted(t *testing.T) {
 	t.Parallel()
 	ctx, interrupt := context.WithCancel(context.Background())
 	defer interrupt()
-	logs, stdout := io.Pipe()
+	output, stdout := io.Pipe()
 	exit := make(chan int, 1)
 	go func() {
 		args := []string{"--data", filepath.Join(t.TempDir(), "oubliette.db"), "--http-addr", "127.0.0.1:0", "serve"}
-		exit <- app.Main(ctx, args, strings.NewReader(""), stdout, io.Discard, func(string) string { return "" })
+		env := map[string]string{"OUBLIETTE_SMTP_ADDR": "127.0.0.1:0", "OUBLIETTE_SMTP_INSECURE_AUTH": "true"}
+		exit <- app.Main(ctx, args, strings.NewReader(""), stdout, io.Discard, func(key string) string { return env[key] })
 		stdout.Close()
 	}()
 
 	var addr string
-	for lines := bufio.NewScanner(logs); addr == "" && lines.Scan(); {
-		addr = regexp.MustCompile(`127\.0\.0\.1:\d+`).FindString(lines.Text())
+	for lines := bufio.NewScanner(output); addr == "" && lines.Scan(); {
+		if listening := regexp.MustCompile(`http=(127\.0\.0\.1:\d+)`).FindStringSubmatch(lines.Text()); listening != nil {
+			addr = listening[1]
+		}
 	}
-	go io.Copy(io.Discard, logs)
+	var afterListening logs
+	drained := make(chan struct{})
+	go func() {
+		io.Copy(&afterListening, output)
+		close(drained)
+	}()
 	if addr == "" {
 		t.Fatalf("serve exited with %d before listening", <-exit)
 	}
@@ -424,5 +755,9 @@ func TestServeCommandRunsUntilInterrupted(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not stop after an interrupt")
+	}
+	<-drained
+	if strings.Contains(afterListening.String(), "level=ERROR") {
+		t.Errorf("a clean stop logged an error: %s", afterListening.String())
 	}
 }
