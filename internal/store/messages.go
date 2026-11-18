@@ -199,15 +199,49 @@ func encodeList(list []string) string {
 	return string(encoded)
 }
 
-func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message) (string, error) {
-	id := newID()
-	_, err := s.db.ExecContext(ctx,
+type RemovedMessage struct {
+	InboxID, ID string
+}
+
+func removedMessages(rows *sql.Rows, err error) ([]RemovedMessage, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var removed []RemovedMessage
+	for rows.Next() {
+		var message RemovedMessage
+		if err := rows.Scan(&message.InboxID, &message.ID); err != nil {
+			return nil, err
+		}
+		removed = append(removed, message)
+	}
+	return removed, rows.Err()
+}
+
+func (s *Store) HoldMessage(ctx context.Context, inboxID string, message Message, inboxCap int) (id string, removed []RemovedMessage, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	defer tx.Rollback()
+	id = newID()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO messages
 			(id, inbox_id, received_at, envelope_sender, envelope_recipients, subject, preview, sender, recipients, size, raw)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, inboxID, message.ReceivedAt.UnixMicro(), message.EnvelopeSender, encodeList(message.EnvelopeRecipients),
-		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(message.Raw), message.Raw)
-	return id, err
+		message.Subject, message.Preview, message.Sender, encodeList(message.Recipients), len(message.Raw), message.Raw); err != nil {
+		return "", nil, err
+	}
+	removed, err = removedMessages(tx.QueryContext(ctx,
+		`DELETE FROM messages WHERE id IN (
+			SELECT id FROM messages WHERE inbox_id = ? ORDER BY received_at DESC, id DESC LIMIT -1 OFFSET ?
+		) RETURNING inbox_id, id`, inboxID, inboxCap))
+	if err != nil {
+		return "", nil, err
+	}
+	return id, removed, tx.Commit()
 }
 
 const messageCount = "(SELECT COUNT(*) FROM messages WHERE inbox_id = inboxes.id)"
@@ -244,6 +278,11 @@ func (s *Store) Message(ctx context.Context, inboxID, id string) (Message, bool,
 func (s *Store) DeleteMessage(ctx context.Context, inboxID, id string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM messages WHERE inbox_id = ? AND id = ?", inboxID, id)
 	return whenNoRow(result, err, ErrMessageUnknown)
+}
+
+func (s *Store) PurgeMessages(ctx context.Context, receivedBefore time.Time) ([]RemovedMessage, error) {
+	return removedMessages(s.db.QueryContext(ctx,
+		"DELETE FROM messages WHERE received_at < ? RETURNING inbox_id, id", receivedBefore.UnixMicro()))
 }
 
 func (s *Store) EmptyInbox(ctx context.Context, inboxID string) error {

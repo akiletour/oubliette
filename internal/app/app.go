@@ -30,6 +30,10 @@ type Config struct {
 	InsecureAuth       bool
 	SMTPCertFile       string
 	SMTPKeyFile        string
+	MaxMessageBytes    int64
+	InboxCap           int
+	AgeLimit           time.Duration
+	PurgeEvery         time.Duration
 	SMTPAdvertisedHost string
 	SMTPAdvertisedPort string
 	Now                func() time.Time
@@ -37,14 +41,16 @@ type Config struct {
 }
 
 type Server struct {
-	store    *store.Store
-	http     *http.Server
-	httpAddr string
-	smtp     *smtp.Server
-	smtpAddr string
+	store     *store.Store
+	http      *http.Server
+	httpAddr  string
+	smtp      *smtp.Server
+	smtpAddr  string
+	stopPurge func()
 }
 
 func Start(cfg Config) (*Server, error) {
+	cfg = withDefaultLimits(cfg)
 	encryption, err := smtpEncryption(cfg)
 	if err != nil {
 		return nil, err
@@ -84,10 +90,16 @@ func Start(cfg Config) (*Server, error) {
 			BaseContext:       func(net.Listener) context.Context { return streaming },
 		},
 		httpAddr: httpListener.Addr().String(),
-		smtp:     intake.NewServer(storage, hub, encryption, cfg.InsecureAuth, cfg.Now, cfg.Log),
+		smtp: intake.NewServer(storage, hub, intake.Rules{
+			Encryption:      encryption,
+			InsecureAuth:    cfg.InsecureAuth,
+			MaxMessageBytes: cfg.MaxMessageBytes,
+			InboxCap:        cfg.InboxCap,
+		}, cfg.Now, cfg.Log),
 		smtpAddr: smtpListener.Addr().String(),
 	}
 	server.http.RegisterOnShutdown(endStreams)
+	server.stopPurge = purgePeriodically(storage, hub, cfg)
 	go func() {
 		if err := server.http.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {
 			cfg.Log.Error("http server stopped", "error", err)
@@ -144,5 +156,6 @@ func (s *Server) Stop(ctx context.Context) error {
 	draining, cancel := context.WithTimeout(ctx, smtpDrain)
 	defer cancel()
 	s.smtp.Shutdown(draining)
+	s.stopPurge()
 	return errors.Join(s.http.Shutdown(ctx), s.store.Close())
 }

@@ -57,6 +57,7 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 		"SMTP host shown to Members, the host of the page when empty (OUBLIETTE_SMTP_ADVERTISED_HOST)")
 	advertisedPort := flags.String("smtp-advertised-port", getenv("OUBLIETTE_SMTP_ADVERTISED_PORT"),
 		"SMTP port shown to Members, the listening port when empty (OUBLIETTE_SMTP_ADVERTISED_PORT)")
+	limits := registerLimits(flags, getenv)
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -65,7 +66,8 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	err := errUsage
 	switch args = flags.Args(); {
 	case len(args) == 1 && args[0] == "serve":
-		err = serve(ctx, Config{
+		var cfg Config
+		cfg, err = limits.apply(Config{
 			DataFile:           *data,
 			HTTPAddr:           *httpAddr,
 			SMTPAddr:           *smtpAddr,
@@ -77,6 +79,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 			Now:                time.Now,
 			Log:                slog.New(slog.NewTextHandler(stdout, nil)),
 		})
+		if err == nil {
+			err = serve(ctx, cfg)
+		}
 	case len(args) > 1 && args[0] == "member":
 		err = member(ctx, *data, args[1], args[2:], stdin, stdout, stderr)
 	}

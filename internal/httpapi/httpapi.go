@@ -369,7 +369,10 @@ func (a *api) streamEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case event := <-events:
+		case event, open := <-events:
+			if !open {
+				return
+			}
 			frame = eventFrame(event)
 		case <-beat.C:
 			frame = ": heartbeat\n\n"

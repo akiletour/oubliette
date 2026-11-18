@@ -24,18 +24,27 @@ var (
 	errUnavailable  = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary failure, try again later"}
 )
 
+type Rules struct {
+	Encryption      *tls.Config
+	InsecureAuth    bool
+	MaxMessageBytes int64
+	InboxCap        int
+}
+
 type backend struct {
+	rules Rules
 	store *store.Store
 	hub   *live.Hub
 	now   func() time.Time
 	log   *slog.Logger
 }
 
-func NewServer(storage *store.Store, hub *live.Hub, encryption *tls.Config, insecureAuth bool, now func() time.Time, log *slog.Logger) *smtp.Server {
-	server := smtp.NewServer(&backend{store: storage, hub: hub, now: now, log: log})
+func NewServer(storage *store.Store, hub *live.Hub, rules Rules, now func() time.Time, log *slog.Logger) *smtp.Server {
+	server := smtp.NewServer(&backend{rules: rules, store: storage, hub: hub, now: now, log: log})
 	server.Domain = "oubliette"
-	server.TLSConfig = encryption
-	server.AllowInsecureAuth = insecureAuth
+	server.TLSConfig = rules.Encryption
+	server.AllowInsecureAuth = rules.InsecureAuth
+	server.MaxMessageBytes = rules.MaxMessageBytes + 1
 	server.EnableSMTPUTF8 = true
 	server.MaxLineLength = maxLineLength
 	server.ReadTimeout = time.Minute
@@ -147,12 +156,15 @@ func (s *session) Data(r io.Reader) error {
 	if len(message.Recipients) == 0 {
 		message.Recipients = s.recipients
 	}
-	id, err := s.backend.store.HoldMessage(context.Background(), s.inbox.ID, message)
+	id, removed, err := s.backend.store.HoldMessage(context.Background(), s.inbox.ID, message, s.backend.rules.InboxCap)
 	if err != nil {
 		s.backend.log.Error("holding a Message failed", "inbox", s.inbox.ID, "error", err)
 		return errUnavailable
 	}
 	s.backend.hub.Received(s.inbox.ID, id)
+	for _, message := range removed {
+		s.backend.hub.Removed(message.InboxID, message.ID)
+	}
 	return nil
 }
 

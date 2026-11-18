@@ -59,6 +59,8 @@ func (h *Hub) notify(inboxID string, event Event) {
 		select {
 		case listener <- event:
 		default:
+			close(listener)
+			delete(h.listeners[inboxID], listener)
 		}
 	}
 }
